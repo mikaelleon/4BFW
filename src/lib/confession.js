@@ -4,6 +4,8 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  FileUploadBuilder,
+  LabelBuilder,
   ModalBuilder,
   PermissionFlagsBits,
   TextInputBuilder,
@@ -13,9 +15,11 @@ import * as db from '../db.js';
 import { dmUser, modLog, notice } from './moderation.js';
 import { COLOR, anonRef, anonTitle, footerLine, prefix, randomSubmissionColor } from './format.js';
 import { PAD_NAME, padPng } from './pad.js';
+import { imageHelp, uploadLimit } from './image.js';
 
 export const MAX_LEN = 2000;
 export const OPEN_BUTTON_ID = 'confess:open';
+export const GUIDE_BUTTON_ID = 'confess:guide';
 export const MODAL_ID = 'confess:modal';
 export { prefix };
 export const REPLY_BUTTON_ID = 'confess:reply';
@@ -111,9 +115,7 @@ function stickyPayload() {
         .setColor(COLOR)
         .setDescription(
           [
-            'Hot take too spicy for the group chat? Wanna debate without catching strays? Got a crush, a rant, or a lowkey hint to drop?',
-            '',
-            '**Drop it here.** Completely __anonymous__—no one’s gonna know *it was you*.',
+            'Got a take too spicy for the group chat? Post it here and let people argue with the idea, not with you.',
             '',
             `-# tap **Write a Submission** below · or \`/fw\` · or DM me \`${prefix()} <message>\``,
           ].join('\n'),
@@ -122,6 +124,7 @@ function stickyPayload() {
     components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(OPEN_BUTTON_ID).setLabel('Write a Submission').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(GUIDE_BUTTON_ID).setLabel('View Guide').setStyle(ButtonStyle.Secondary),
       ),
     ],
     allowedMentions: { parse: [] },
@@ -133,17 +136,19 @@ export function confessModal(reply = null) {
   return new ModalBuilder()
     .setCustomId(reply ? `${MODAL_ID}:${reply.messageId}` : MODAL_ID)
     .setTitle(reply ? `Reply to ${anonTitle(reply.number)}` : 'Write a submission')
-    .addComponents(
-      new ActionRowBuilder().addComponents(
+    .addLabelComponents(
+      new LabelBuilder().setLabel('Your submission').setTextInputComponent(
         new TextInputBuilder()
           .setCustomId('text')
-          .setLabel('Your submission')
           .setStyle(TextInputStyle.Paragraph)
           .setPlaceholder('Nobody will know it was you.')
-          .setMinLength(1)
           .setMaxLength(MAX_LEN)
-          .setRequired(true),
+          .setRequired(false), // may be empty when an image is attached; submitConfession rejects "nothing at all"
       ),
+      new LabelBuilder()
+        .setLabel('Image (optional)')
+        .setDescription('PNG, JPG, GIF or WEBP')
+        .setFileUploadComponent(new FileUploadBuilder().setCustomId('image').setMinValues(0).setMaxValues(1).setRequired(false)),
     );
 }
 
@@ -193,6 +198,9 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     if (!content && !image) return fail('Write something first.');
     if (content.length > MAX_LEN) return fail(`Too long. Max ${MAX_LEN} characters.`);
 
+    const limit = uploadLimit(guild);
+    if (image && image.buffer.length > limit) return fail(`That image is too big for this server. ${imageHelp(limit)}`);
+
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) return fail('You are not a member of that server.');
     if (db.getBan(guild.id, userId)) return fail('You are banned from posting in this server.');
@@ -208,6 +216,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     }
 
     const { id, number } = db.createConfession(guild.id, userId, content, Boolean(image));
+    if (image) db.setConfessionImage(id, image.name, image.buffer);
     let msg;
     const { body, targets } = linkReferences(guild.id, content, replyToMessageId);
     try {

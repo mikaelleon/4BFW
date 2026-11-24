@@ -69,12 +69,46 @@ if (schemaVersion < 2) {
 // v3: optional moderator role that may use the mod-log buttons and /mod commands.
 if (schemaVersion < 3) {
   db.exec('ALTER TABLE guilds ADD COLUMN mod_role_id TEXT; PRAGMA user_version = 3;');
+  schemaVersion = 3;
+}
+// v4: role that gets an "I'm online" DM when the bot starts, and when the last one went out (anti-spam on restarts).
+if (schemaVersion < 4) {
+  db.exec('ALTER TABLE guilds ADD COLUMN online_role_id TEXT; ALTER TABLE guilds ADD COLUMN online_notified_at INTEGER; PRAGMA user_version = 4;');
+  schemaVersion = 4;
+}
+// v5: keep each submission's image so the mod log can show it (also in later entries, after the post is deleted).
+if (schemaVersion < 5) {
+  db.exec(`CREATE TABLE IF NOT EXISTS confession_images (
+    confession_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    data BLOB NOT NULL
+  ); PRAGMA user_version = 5;`);
+}
+
+// Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
+db.exec('CREATE TABLE IF NOT EXISTS dm_cursor (user_id TEXT PRIMARY KEY, last_id TEXT NOT NULL)');
+
+export function getDmCursor(userId) {
+  return db.prepare('SELECT last_id FROM dm_cursor WHERE user_id = ?').get(userId)?.last_id ?? null;
+}
+
+export function setDmCursor(userId, lastId) {
+  db.prepare('INSERT INTO dm_cursor (user_id, last_id) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_id = excluded.last_id').run(userId, lastId);
+}
+
+/** Everyone the bot has talked to: past authors plus anyone with a cursor. */
+export function knownDmUsers() {
+  return db
+    .prepare('SELECT author_id AS id FROM confessions UNION SELECT user_id AS id FROM dm_cursor')
+    .all()
+    .map((r) => r.id);
 }
 
 /* ---------- guild config ---------- */
 
 const GUILD_FIELDS = new Set([
   'channel_id', 'log_channel_id', 'role_id', 'mod_role_id', 'sticky_id', 'cooldown', 'warn_limit', 'welcome_dm',
+  'online_role_id', 'online_notified_at',
 ]);
 
 export function getGuild(guildId) {
@@ -114,8 +148,19 @@ export function createConfession(guildId, authorId, content, hasImage = false) {
 
 /** Undo a createConfession whose Discord post failed. Call only while holding the guild lock. */
 export function discardConfession(guildId, id, number) {
+  db.prepare('DELETE FROM confession_images WHERE confession_id = ?').run(id);
   db.prepare('DELETE FROM confessions WHERE guild_id = ? AND id = ?').run(guildId, id);
   db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
+}
+
+export function setConfessionImage(id, name, buffer) {
+  db.prepare('INSERT OR REPLACE INTO confession_images (confession_id, name, data) VALUES (?, ?, ?)').run(id, name, buffer);
+}
+
+/** { name, buffer } or null. */
+export function getConfessionImage(id) {
+  const r = db.prepare('SELECT name, data FROM confession_images WHERE confession_id = ?').get(id);
+  return r ? { name: r.name, buffer: Buffer.from(r.data) } : null;
 }
 
 export function setConfessionMessage(guildId, id, channelId, messageId) {

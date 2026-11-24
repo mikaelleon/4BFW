@@ -28,9 +28,12 @@ export async function modLog(guild, { title, id, number, actor, reason, url, con
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
   if (!channel) return;
 
+  // The stored image (if any) is attached to every entry about this submission, so mods see what was posted.
+  const image = hasImage && id ? db.getConfessionImage(id) : null;
+
   const parts = [];
   if (content) parts.push(quote(content));
-  if (hasImage) parts.push('*Includes an image*');
+  if (hasImage && !image) parts.push('*Included an image (no longer stored)*');
   if (url) parts.push(`[Jump to message](${url})`);
 
   const embed = new EmbedBuilder()
@@ -43,14 +46,14 @@ export async function modLog(guild, { title, id, number, actor, reason, url, con
       { name: 'Timestamp', value: formatDateTime(), inline: true },
       BLANK,
     )
-    .setImage(`attachment://${PAD_NAME}`);
+    .setImage(`attachment://${image ? image.name : PAD_NAME}`);
   if (title) embed.setTitle(title);
   if (parts.length) embed.setDescription(parts.join('\n\n'));
   if (reason) embed.addFields({ name: 'Reason', value: reason.slice(0, 1000) });
 
   const payload = {
     embeds: [embed],
-    files: [new AttachmentBuilder(padPng(), { name: PAD_NAME })],
+    files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
     allowedMentions: { parse: [] },
   };
   if (controls) {

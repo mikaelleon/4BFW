@@ -38,15 +38,15 @@ function howToPage({ cfg }) {
     '',
     '> **1. Slash command:**',
     '> - Type `/fw` in any channel of the server, or in the bot’s DMs.',
-    '> - Fill in the message field, and only you will see the reply.',
+    '> - Fill in the message field (and the optional `image`), and only you will see the reply.',
     '',
     '> **2. Button:**',
     `> - Press **Write a Submission** at the bottom of ${where}.`,
-    '> - Type your post in the pop-up and hit submit.',
+    '> - Type your post in the pop-up, optionally upload an image, and hit submit.',
     '',
     '> **3. Direct message:**',
     `> - DM the bot with \`${p} <your message>\`.`,
-    '> - You can attach an image to include it in your post, but this works in **DMs only**.',
+    '> - You can attach an image to include it in your post.',
     '> - If you share more than one server with the bot, it will ask which one to post to.',
     '> - Pick the right server before confirming.',
     '',
@@ -130,6 +130,36 @@ export function guidePayload(guild, page = 0) {
 
 export async function dmGuide(user, guild) {
   await user.send(guidePayload(guild, 0));
+}
+
+const ONLINE_COOLDOWN_MS = 30 * 60_000;
+
+/**
+ * Called when the bot starts: DM an "online" embed to every human with the server's online-notice role.
+ * Skipped if one went out in the last 30 minutes, so repeated restarts do not spam people.
+ */
+export async function notifyOnline(guild) {
+  const cfg = db.getGuild(guild.id);
+  if (!cfg?.online_role_id || !cfg.channel_id) return;
+  if (cfg.online_notified_at && Date.now() - cfg.online_notified_at < ONLINE_COOLDOWN_MS) return;
+  db.updateGuild(guild.id, { online_notified_at: Date.now() });
+
+  const embed = new EmbedBuilder()
+    .setColor(COLOR)
+    .setTitle('4BFW is back online')
+    .setDescription(`Submissions are open again in <#${cfg.channel_id}>. Use \`/fw\` or DM me \`${prefix()} <message>\`.`)
+    .setFooter({ text: `4BFW • ${formatDateTime()}` });
+
+  const members = await guild.members.fetch();
+  const targets = members.filter((m) => !m.user.bot && m.roles.cache.has(cfg.online_role_id));
+  for (const member of targets.values()) {
+    try {
+      await member.user.send({ embeds: [embed] });
+    } catch (err) {
+      if (err?.code === 40003) await sleep(30_000); // opening DMs too fast
+    }
+    await sleep(1500);
+  }
 }
 
 export function isBroadcasting(guildId) {

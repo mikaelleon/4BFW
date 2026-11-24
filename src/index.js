@@ -15,6 +15,7 @@ import { candidateGuilds, serverAutocomplete } from './lib/context.js';
 import {
   MAX_LEN,
   MODAL_ID,
+  GUIDE_BUTTON_ID,
   OPEN_BUTTON_ID,
   REPLY_BUTTON_ID,
   confessModal,
@@ -22,10 +23,10 @@ import {
   submitConfession,
 } from './lib/confession.js';
 import { anonTitle, prefix } from './lib/format.js';
-import { IMAGE_HELP, downloadImage, pickImage } from './lib/image.js';
+import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
-import { GUIDE_PREFIX, dmGuide, guidePayload } from './lib/guide.js';
+import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and fill it in.');
@@ -54,42 +55,51 @@ client.once(Events.ClientReady, async (c) => {
     const guild = c.guilds.cache.get(cfg.guild_id);
     if (guild) await ensureSticky(guild).catch((err) => console.error(`Sticky check failed for ${guild.id}:`, err));
   }
+  catchUpDms(c).catch((err) => console.error('DM catch-up failed:', err));
+  // Online notices are slow (throttled DMs), so run them after the sticky checks and in the background.
+  for (const cfg of db.configuredGuilds()) {
+    const guild = c.guilds.cache.get(cfg.guild_id);
+    if (guild) notifyOnline(guild).catch((err) => console.error(`Online notice failed for ${guild.id}:`, err));
+  }
 });
 
 /* ---------- DM: "fw <text>" (or the /fw slash command) ---------- */
 
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || message.guildId) return;
-
+/** Handle one DM. `catchUp` = it was sent while the bot was offline: no usage reply for non-submissions, and the user is told it was late. */
+async function handleDm(message, catchUp = false) {
   const p = prefix();
-  const usage = `To post anonymously, send:\n\`${p} <your message>\`\nAttach an image to include it in your post.\n\nOr use the \`/fw\` command here or in the server (images work only by DM).`;
+  const usage = `To post anonymously, send:\n\`${p} <your message>\`\nAttach an image to include it in your post.\n\nOr use the \`/fw\` command (it has an image option too).`;
   const match = message.content.trim().match(new RegExp(`^${escapeRe(p)}(?:\\s+([\\s\\S]*))?$`, 'i'));
-  if (!match) return message.author.send(usage).catch(() => {});
+  if (!match) return catchUp ? undefined : message.author.send(usage).catch(() => {});
 
   const text = (match[1] ?? '').trim();
   const dm = (content) => message.author.send(content).catch(() => {});
 
-  // Images are only accepted here, in DMs. One image per post, re-uploaded into the channel.
-  const { image: attachment, extra, rejected } = pickImage(message.attachments);
-  if (!text && !attachment) return dm(rejected ? IMAGE_HELP : usage);
+  const guilds = await candidateGuilds(client, message.author.id);
+  if (guilds.length === 0) return dm('I found no server you are in that has submissions set up.');
+
+  // One image per post, re-uploaded into the channel. Size cap = Discord's upload limit of the biggest candidate
+  // server; submitConfession re-checks it against the server actually chosen.
+  const limit = Math.max(...guilds.map(uploadLimit));
+  const { image: attachment, extra, rejected } = pickImage(message.attachments, limit);
+  if (!text && !attachment) return dm(rejected ? imageHelp(limit) : usage);
   if (text.length > MAX_LEN) return dm(`Too long. Max ${MAX_LEN} characters.`);
 
   let image = null;
   if (attachment) {
     try {
-      image = await downloadImage(attachment);
+      image = await downloadImage(attachment, limit);
     } catch (err) {
       console.error('Image download failed:', err);
       return dm('I could not download that image. Try sending it again.');
     }
   }
-  const note = [extra ? 'Only the first image was used.' : '', rejected && attachment ? `Skipped a file I cannot use. ${IMAGE_HELP}` : '']
+  const note = [extra ? 'Only the first image was used.' : '', rejected && attachment ? `Skipped a file I cannot use. ${imageHelp(limit)}` : '']
     .filter(Boolean)
     .join(' ');
-  const posted = (res, guild) => (res.ok ? `Posted as **${anonTitle(res.number)}** in **${guild.name}**.${note ? `\n${note}` : ''}` : res.error);
+  const late = catchUp ? ' I was offline when you sent it, so it went up late.' : '';
+  const posted = (res, guild) => (res.ok ? `Posted as **${anonTitle(res.number)}** in **${guild.name}**.${late}${note ? `\n${note}` : ''}` : res.error);
 
-  const guilds = await candidateGuilds(client, message.author.id);
-  if (guilds.length === 0) return dm('I found no server you are in that has submissions set up.');
   if (guilds.length === 1) return dm(posted(await submitConfession(guilds[0], message.author.id, text, null, image), guilds[0]));
 
   const token = randomUUID().slice(0, 8);
@@ -99,9 +109,51 @@ client.on(Events.MessageCreate, async (message) => {
     .setPlaceholder('Which server?')
     .addOptions(guilds.slice(0, 25).map((g) => ({ label: g.name.slice(0, 100), value: g.id })));
   return message.author
-    .send({ content: 'Which server should this go to?', components: [new ActionRowBuilder().addComponents(menu)] })
+    .send({ content: `Which server should this go to?${late}`, components: [new ActionRowBuilder().addComponents(menu)] })
     .catch(() => {});
+}
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot || message.guildId) return;
+  db.setDmCursor(message.author.id, message.id);
+  await handleDm(message);
 });
+
+/* ---------- DM catch-up: submissions sent while the bot was offline ---------- */
+
+const CATCHUP_MAX_AGE_MS = 24 * 60 * 60_000; // older than this is stale: ignored
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function catchUpDms(c) {
+  for (const userId of db.knownDmUsers()) {
+    try {
+      const user = await c.users.fetch(userId);
+      const dm = await user.createDM();
+      const cursor = db.getDmCursor(userId);
+
+      if (!cursor) {
+        // First time we see this user: remember where their DM stands, process nothing old.
+        const [latest] = (await dm.messages.fetch({ limit: 1 })).values();
+        if (latest) db.setDmCursor(userId, latest.id);
+        continue;
+      }
+
+      const missed = [...(await dm.messages.fetch({ after: cursor, limit: 50 })).values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+      for (const message of missed) {
+        // A live message may have moved the cursor while we were busy: never handle one twice.
+        const current = db.getDmCursor(userId);
+        if (current && BigInt(message.id) <= BigInt(current)) continue;
+        db.setDmCursor(userId, message.id);
+        if (message.author.bot || message.author.id !== userId) continue;
+        if (Date.now() - message.createdTimestamp > CATCHUP_MAX_AGE_MS) continue;
+        await handleDm(message, true);
+      }
+    } catch (err) {
+      console.error(`DM catch-up failed for ${userId}:`, err.message);
+    }
+    await sleep(300);
+  }
+}
 
 /* ---------- welcome DM ---------- */
 
@@ -142,6 +194,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.update(guidePayload(guild, Number(page)));
     }
 
+    // "View Guide" button on the sticky: guide shown only to the clicker.
+    if (interaction.isButton() && interaction.customId === GUIDE_BUTTON_ID) {
+      if (!interaction.guild) return interaction.reply({ content: 'Use this button inside a server.', flags: EPHEMERAL });
+      return interaction.reply({ ...guidePayload(interaction.guild, 0), flags: EPHEMERAL });
+    }
+
     if (interaction.isButton() && interaction.customId === OPEN_BUTTON_ID) {
       if (interaction.guildId && db.getBan(interaction.guildId, interaction.user.id)) {
         return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
@@ -165,7 +223,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply({ flags: EPHEMERAL });
       const replyTo = interaction.customId.split(':')[2] ?? null; // "confess:modal:<messageId>"
       const guild = interaction.guild ?? (await client.guilds.fetch(interaction.guildId));
-      const res = await submitConfession(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo);
+      let image = null;
+      const upload = interaction.fields.getUploadedFiles('image')?.first();
+      if (upload) {
+        const prepared = await prepareImage(upload, uploadLimit(guild));
+        if (prepared.error) return interaction.editReply(prepared.error);
+        image = prepared.image;
+      }
+      const res = await submitConfession(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image);
       return interaction.editReply(res.ok ? `Posted as **${anonTitle(res.number)}**.` : res.error);
     }
 

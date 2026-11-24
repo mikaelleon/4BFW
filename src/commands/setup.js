@@ -54,6 +54,15 @@ export default {
     .addSubcommand((s) =>
       serverOpt(
         s
+          .setName('onlinerole')
+          .setDescription('Set the role that gets a DM when the bot comes online (omit role to clear)')
+          .addRoleOption((o) => o.setName('role').setDescription('Role'))
+          .addStringOption((o) => o.setName('role_id').setDescription('Role ID (use this in DMs)')),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        s
           .setName('modrole')
           .setDescription('Set the role that can use mod-log buttons and /mod (omit role to clear)')
           .addRoleOption((o) => o.setName('role').setDescription('Role'))
@@ -133,6 +142,20 @@ export default {
       return interaction.editReply(`Guide role set to **${role.name}**. Use \`/announce\` to DM them the guide.`);
     }
 
+    if (sub === 'onlinerole') {
+      const id = interaction.options.getRole('role')?.id ?? interaction.options.getString('role_id')?.trim() ?? null;
+      if (!id) {
+        db.updateGuild(guild.id, { online_role_id: null });
+        return interaction.editReply('Online notice role cleared.');
+      }
+      const role = await guild.roles.fetch(id).catch(() => null);
+      if (!role) return interaction.editReply('I could not find that role.');
+      db.updateGuild(guild.id, { online_role_id: role.id });
+      return interaction.editReply(
+        `Members with **${role.name}** will get a DM whenever the bot comes online (at most once every 30 minutes).`,
+      );
+    }
+
     if (sub === 'modrole') {
       const id = interaction.options.getRole('role')?.id ?? interaction.options.getString('role_id')?.trim() ?? null;
       if (!id) {
@@ -187,6 +210,7 @@ export default {
         { name: 'Submissions channel', value: c.channel_id ? `<#${c.channel_id}>` : 'Not set', inline: true },
         { name: 'Mod log', value: c.log_channel_id ? `<#${c.log_channel_id}>` : 'Not set', inline: true },
         { name: 'Guide role', value: c.role_id ? `<@&${c.role_id}>` : 'Not set', inline: true },
+        { name: 'Online notice role', value: c.online_role_id ? `<@&${c.online_role_id}>` : 'Not set', inline: true },
         { name: 'Moderator role', value: c.mod_role_id ? `<@&${c.mod_role_id}>` : 'Not set', inline: true },
         { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
