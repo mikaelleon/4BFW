@@ -73,9 +73,15 @@ export default {
       serverOpt(
         s
           .setName('options')
-          .setDescription('Cooldown, warning limit, welcome DM')
+          .setDescription('Cooldown, warning limit and expiry, report limit, welcome DM')
           .addIntegerOption((o) => o.setName('cooldown').setDescription('Seconds between submissions per user').setMinValue(0).setMaxValue(3600))
           .addIntegerOption((o) => o.setName('warn_limit').setDescription('Warnings before an automatic submission ban').setMinValue(1).setMaxValue(20))
+          .addIntegerOption((o) =>
+            o.setName('warn_expiry_days').setDescription('Warnings stop counting after this many days (0 = never)').setMinValue(0).setMaxValue(365),
+          )
+          .addIntegerOption((o) =>
+            o.setName('report_limit').setDescription('Reports that auto-hide a post for review (0 = never auto-hide)').setMinValue(0).setMaxValue(50),
+          )
           .addBooleanOption((o) => o.setName('welcome_dm').setDescription('DM the guide to new members when they join')),
       ),
     )
@@ -176,6 +182,10 @@ export default {
       const cooldown = interaction.options.getInteger('cooldown');
       const warnLimit = interaction.options.getInteger('warn_limit');
       const welcome = interaction.options.getBoolean('welcome_dm');
+      const warnExpiry = interaction.options.getInteger('warn_expiry_days');
+      const reportLimit = interaction.options.getInteger('report_limit');
+      if (warnExpiry !== null) patch.warn_expiry_days = warnExpiry;
+      if (reportLimit !== null) patch.report_limit = reportLimit;
       if (cooldown !== null) patch.cooldown = cooldown;
       if (warnLimit !== null) patch.warn_limit = warnLimit;
       if (welcome !== null) patch.welcome_dm = welcome ? 1 : 0;
@@ -214,6 +224,8 @@ export default {
         { name: 'Moderator role', value: c.mod_role_id ? `<@&${c.mod_role_id}>` : 'Not set', inline: true },
         { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
+        { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
+        { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },
         { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },
         { name: 'Next public number', value: anonRef((c.counter ?? 0) + 1), inline: true },
       );

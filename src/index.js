@@ -18,6 +18,7 @@ import {
   GUIDE_BUTTON_ID,
   OPEN_BUTTON_ID,
   REPLY_BUTTON_ID,
+  REPORT_BUTTON_ID,
   confessModal,
   ensureSticky,
   submitConfession,
@@ -26,6 +27,8 @@ import { anonTitle, prefix } from './lib/format.js';
 import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
+import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
+import { startScheduler } from './lib/scheduler.js';
 import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
 
 if (!process.env.DISCORD_TOKEN) {
@@ -55,6 +58,7 @@ client.once(Events.ClientReady, async (c) => {
     const guild = c.guilds.cache.get(cfg.guild_id);
     if (guild) await ensureSticky(guild).catch((err) => console.error(`Sticky check failed for ${guild.id}:`, err));
   }
+  startScheduler(c);
   catchUpDms(c).catch((err) => console.error('DM catch-up failed:', err));
   // Online notices are slow (throttled DMs), so run them after the sticky checks and in the background.
   for (const cfg of db.configuredGuilds()) {
@@ -218,6 +222,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
     }
+
+    // "Report" button under a submission, and its reason pop-up.
+    if (interaction.isButton() && interaction.customId === REPORT_BUTTON_ID) return handleReportButton(interaction);
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REPORT_MODAL_PREFIX}:`)) return handleReportModal(interaction);
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_ID)) {
       await interaction.deferReply({ flags: EPHEMERAL });

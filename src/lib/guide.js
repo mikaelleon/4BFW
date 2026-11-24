@@ -54,6 +54,10 @@ function howToPage({ cfg }) {
     '> - Press Reply under any post to respond to it.',
     '> - Or type its number, like `#012`, and it turns into a link',
     '> - The author gets a DM to notify that someone replied to their post',
+    '',
+    '> **5. Reporting:**',
+    '> - Press Report under a post that breaks the rules. Reports are anonymous.',
+    '> - Enough reports hide the post until a moderator reviews it.',
   ].join('\n');
 }
 

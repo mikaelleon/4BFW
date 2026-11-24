@@ -22,7 +22,7 @@ function quote(text) {
  * and the time. Fixed width (see pad.js), shared embed color, no footer.
  * `controls: true` adds the Warn / Delete / Ban buttons (used on new-submission entries).
  */
-export async function modLog(guild, { title, id, number, actor, reason, url, content, authorId, hasImage, controls = false }) {
+export async function modLog(guild, { title, id, number, actor, reason, url, content, authorId, hasImage, controls = false, fields = [], ping = null }) {
   const cfg = db.getGuild(guild.id);
   if (!cfg?.log_channel_id) return;
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
@@ -49,18 +49,30 @@ export async function modLog(guild, { title, id, number, actor, reason, url, con
     .setImage(`attachment://${image ? image.name : PAD_NAME}`);
   if (title) embed.setTitle(title);
   if (parts.length) embed.setDescription(parts.join('\n\n'));
+  if (fields.length) embed.addFields(fields);
   if (reason) embed.addFields({ name: 'Reason', value: reason.slice(0, 1000) });
 
   const payload = {
+    // `ping` = a role id to notify (the moderator role); nothing else in the entry can ping anyone.
+    content: ping ? `<@&${ping}>` : undefined,
     embeds: [embed],
     files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
-    allowedMentions: { parse: [] },
+    allowedMentions: ping ? { roles: [ping] } : { parse: [] },
   };
   if (controls) {
     const row = db.getConfession(guild.id, id);
     if (row) payload.components = [controlsRow(row, Boolean(db.getBan(guild.id, row.author_id)))];
   }
   await channel.send(payload).catch(() => {});
+}
+
+/** A log entry that is not about one submission (e.g. a timed ban ending). */
+export async function systemLog(guild, title, description) {
+  const cfg = db.getGuild(guild.id);
+  if (!cfg?.log_channel_id) return;
+  const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
+  const embed = new EmbedBuilder().setColor(COLOR).setTitle(title).setDescription(description).setFooter({ text: formatDateTime() });
+  await channel?.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
 export async function dmUser(client, userId, embed) {

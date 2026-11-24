@@ -1,7 +1,8 @@
 // Interaction handlers for the moderation buttons under each mod-log entry.
 import { ActionRowBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import * as db from '../db.js';
-import { banAuthor, deleteSubmission, unbanAuthor, warnAuthor } from './actions.js';
+import { banAuthor, deleteSubmission, restoreSubmission, unbanAuthor, warnAuthor } from './actions.js';
+import { parseDuration } from './duration.js';
 import { isModerator } from './context.js';
 import { controlsRow } from './controls-row.js';
 import { anonRef } from './format.js';
@@ -44,6 +45,11 @@ export async function handleControlButton(interaction) {
     const text = await unbanAuthor(interaction.client, interaction.guild, row, interaction.user);
     return finish(interaction, row, text);
   }
+  if (action === 'restore') {
+    await interaction.deferUpdate();
+    const text = await restoreSubmission(interaction.guild, row, interaction.user);
+    return finish(interaction, row, text);
+  }
   if (!TITLES[action]) return interaction.reply({ content: 'Unknown action.', flags: EPHEMERAL });
 
   const modal = new ModalBuilder()
@@ -59,6 +65,19 @@ export async function handleControlButton(interaction) {
           .setRequired(false),
       ),
     );
+  if (action === 'ban') {
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('duration')
+          .setLabel('Duration (empty = permanent)')
+          .setPlaceholder('30m, 12h, 7d, 2w')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(8)
+          .setRequired(false),
+      ),
+    );
+  }
   return interaction.showModal(modal);
 }
 
@@ -68,6 +87,13 @@ export async function handleReasonModal(interaction) {
   if (!found) return;
   const { action, row } = found;
 
+  let durationMs = null;
+  if (action === 'ban') {
+    const parsed = parseDuration(interaction.fields.getTextInputValue('duration'));
+    if (parsed.error) return interaction.reply({ content: parsed.error, flags: EPHEMERAL });
+    durationMs = parsed.ms;
+  }
+
   await interaction.deferUpdate();
   const reason = interaction.fields.getTextInputValue('reason').trim() || null;
   const { client, guild, user } = interaction;
@@ -75,7 +101,7 @@ export async function handleReasonModal(interaction) {
   let text;
   if (action === 'warn') text = await warnAuthor(client, guild, row, user, reason);
   else if (action === 'delete') text = await deleteSubmission(guild, row, user, reason);
-  else if (action === 'ban') text = await banAuthor(client, guild, row, user, reason);
+  else if (action === 'ban') text = await banAuthor(client, guild, row, user, reason, { durationMs });
   else text = 'Unknown action.';
   return finish(interaction, row, text);
 }

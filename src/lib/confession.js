@@ -23,6 +23,7 @@ export const GUIDE_BUTTON_ID = 'confess:guide';
 export const MODAL_ID = 'confess:modal';
 export { prefix };
 export const REPLY_BUTTON_ID = 'confess:reply';
+export const REPORT_BUTTON_ID = 'confess:report';
 const jumpUrl = (guildId, row) => `https://discord.com/channels/${guildId}/${row.channel_id}/${row.message_id}`;
 
 /* One queue per guild so numbering and the sticky message stay in order. */
@@ -56,6 +57,7 @@ function replyRow() {
   return new ActionRowBuilder().addComponents(
     // No confession ID in the custom id: the target is read from the message the button sits on.
     new ButtonBuilder().setCustomId(REPLY_BUTTON_ID).setLabel('Reply').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(REPORT_BUTTON_ID).setLabel('Report').setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -219,9 +221,10 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     if (image) db.setConfessionImage(id, image.name, image.buffer);
     let msg;
     const { body, targets } = linkReferences(guild.id, content, replyToMessageId);
+    const color = randomSubmissionColor(guild.id);
     try {
       msg = await channel.send({
-        embeds: [confessionEmbed(number, body, randomSubmissionColor(guild.id), image ? image.name : PAD_NAME)],
+        embeds: [confessionEmbed(number, body, color, image ? image.name : PAD_NAME)],
         files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
         components: [replyRow()],
         allowedMentions: { parse: [] },
@@ -232,6 +235,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
       return fail('Discord refused the post. Try again in a bit.');
     }
     db.setConfessionMessage(guild.id, id, channel.id, msg.id);
+    db.setConfessionRendered(id, body, color);
 
     // Admin-only: the ID appears in the mod log, never in the public channel.
     await modLog(guild, {
@@ -253,6 +257,52 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
 export const resetCounterSafely = (guild, startAt) => withLock(guild.id, async () => db.resetCounter(guild.id, startAt));
 
 /* ---------- moderation helpers ---------- */
+
+async function fetchPostMessage(guild, row) {
+  if (!row.channel_id || !row.message_id) return null;
+  const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+  return channel?.messages.fetch(row.message_id).catch(() => null) ?? null;
+}
+
+/** Auto-hide: swap the post for a placeholder (same message, so links keep working) until a moderator decides. */
+export async function hideConfessionMessage(guild, row) {
+  const msg = await fetchPostMessage(guild, row);
+  if (!msg) {
+    db.markConfession(guild.id, row.id, 'deleted'); // someone already removed it by hand
+    return false;
+  }
+  const embed = new EmbedBuilder()
+    .setColor(COLOR)
+    .setTitle(anonTitle(row.number))
+    .setDescription('*This submission was hidden after reports and is waiting for a moderator to review it.*')
+    .setImage(`attachment://${PAD_NAME}`);
+  await msg.edit({
+    embeds: [embed],
+    files: [new AttachmentBuilder(padPng(), { name: PAD_NAME })],
+    attachments: [],
+    components: [],
+    allowedMentions: { parse: [] },
+  });
+  db.markConfession(guild.id, row.id, 'hidden');
+  return true;
+}
+
+/** Put a hidden post back exactly as it was (text, color, image) and clear its reports. */
+export async function restoreConfessionMessage(guild, row) {
+  const msg = await fetchPostMessage(guild, row);
+  if (!msg) return false;
+  const image = row.has_image ? db.getConfessionImage(row.id) : null;
+  await msg.edit({
+    embeds: [confessionEmbed(row.number, row.rendered ?? row.content, row.color ?? randomSubmissionColor(guild.id), image ? image.name : PAD_NAME)],
+    files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
+    attachments: [],
+    components: [replyRow()],
+    allowedMentions: { parse: [] },
+  });
+  db.markConfession(guild.id, row.id, 'posted');
+  db.clearReports(row.id);
+  return true;
+}
 
 export async function deleteConfessionMessage(guild, row) {
   if (row.channel_id && row.message_id) {
