@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
+import http from 'node:http';
 import {
   ActionRowBuilder,
   Client,
@@ -33,6 +34,11 @@ import { handleReactionButton, handleVoteButton, parsePollOptions } from './lib/
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
 import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
+
+// Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
+http
+  .createServer((_, res) => res.end('ok'))
+  .listen(process.env.PORT || 3000);
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and fill it in.');
