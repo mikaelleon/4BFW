@@ -26,7 +26,7 @@ export default {
       o.setName('cw').setDescription('Content warning: hides your text behind a spoiler, e.g. "violence"').setMaxLength(MAX_CW_LEN),
     )
     .addStringOption((o) =>
-      o.setName('poll').setDescription('Make it a poll: 2-5 options separated by | (your message is the question)').setMaxLength(250),
+      o.setName('poll').setDescription('Make it a poll: yes/no, or 2-5 options separated by | (your message is the question)').setMaxLength(250),
     )
     .addIntegerOption((o) => o.setName('poll_hours').setDescription('Close the poll after this many hours (default: the server setting)').setMinValue(1).setMaxValue(168))
     .addAttachmentOption((o) => o.setName('image').setDescription('Optional image (PNG, JPG, GIF or WEBP)'))

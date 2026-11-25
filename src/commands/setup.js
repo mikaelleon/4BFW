@@ -149,8 +149,8 @@ export default {
         channelOpts(
           s
             .setName('featured')
-            .setDescription('Copy posts that collect enough 👍 + ❤️ to a featured channel')
-            .addIntegerOption((o) => o.setName('threshold').setDescription('Likes needed (👍 + ❤️). Default 5').setMinValue(1).setMaxValue(1000))
+            .setDescription('Copy posts that collect enough 👍 to a featured channel')
+            .addIntegerOption((o) => o.setName('threshold').setDescription('Likes (👍) needed. Default 5').setMinValue(1).setMaxValue(1000))
             .addBooleanOption((o) => o.setName('off').setDescription('Turn the featured channel off')),
         ),
       ),
@@ -334,7 +334,7 @@ export default {
       db.updateGuild(guild.id, { ...highlightTimers(cfg, period), highlight_channel_id: target, highlight_period: period });
       const when = { daily: 'every 24 hours', weekly: 'every 7 days', both: 'every 24 hours and every 7 days' }[period];
       return interaction.editReply(
-        `The most-liked submission (👍 + ❤️) will be posted in <#${target}> ${when}, starting from now. Nothing is posted if nobody liked anything.`,
+        `The most-liked submission (👍) will be posted in <#${target}> ${when}, starting from now. Nothing is posted if nobody liked anything.`,
       );
     }
 
@@ -360,7 +360,7 @@ export default {
       const saved = db.updateGuild(guild.id, patch);
       if (!saved.featured_channel_id) return interaction.editReply(`Threshold saved (${saved.featured_threshold}). Pick a \`channel\` to turn the featured channel on.`);
       return interaction.editReply(
-        `Posts with **${saved.featured_threshold}** or more 👍 + ❤️ are now copied to <#${saved.featured_channel_id}>. Posts that already have that many are featured on their next reaction.`,
+        `Posts with **${saved.featured_threshold}** or more 👍 are now copied to <#${saved.featured_channel_id}>. Posts that already have that many are featured on their next reaction.`,
       );
     }
 

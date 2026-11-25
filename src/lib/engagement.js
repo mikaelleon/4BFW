@@ -1,9 +1,9 @@
-// Button reactions (👍 👎 ❤️) and poll votes under submissions. One choice per person, clicking it again withdraws it.
+// Button reactions (👍 👎) and poll votes under submissions. One choice per person, clicking it again withdraws it.
 // Nobody sees who voted: the user id is stored only to enforce the one-vote rule.
 // Polls end at their end time or when the author (or a moderator) presses Close poll; results go in a reply.
 import { EmbedBuilder, MessageFlags } from 'discord.js';
 import * as db from '../db.js';
-import { MAX_POLL_OPTIONS, buildPost, fetchPostMessage, postComponents } from './confession.js';
+import { MAX_POLL_OPTIONS, YES_NO, buildPost, fetchPostMessage, postComponents } from './confession.js';
 import { isModerator } from './context.js';
 import { maybeFeature } from './featured.js';
 import { COLOR, anonTitle } from './format.js';
@@ -11,18 +11,20 @@ import { userKey } from './identity.js';
 import { getTag } from './tags.js';
 
 export const MAX_OPTION_LEN = 40;
-const KINDS = new Set(['up', 'down', 'heart']);
+const KINDS = new Set(['up', 'down']);
 const EPHEMERAL = MessageFlags.Ephemeral;
 
-/** Poll options typed by a user (one per line, or split by `|` for the slash command). Empty = not a poll. */
+/** Poll options typed by a user (one per line, or split by `|` for the slash command). Empty = not a poll. "yes/no" = a yes-or-no poll. */
 export function parsePollOptions(text, separator = /\r?\n/) {
   const raw = (text ?? '').trim();
   if (!raw) return { options: null };
+  if (/^(yes\s*(\/|,|or)\s*no|yes\s*no|y\s*\/\s*n)$/i.test(raw)) return { options: [...YES_NO] };
   const options = raw
     .split(separator)
     .map((o) => o.trim())
     .filter(Boolean);
-  if (options.length < 2 || options.length > MAX_POLL_OPTIONS) return { error: `A poll needs 2 to ${MAX_POLL_OPTIONS} options.` };
+  if (options.length === 2 && options[0].toLowerCase() === 'yes' && options[1].toLowerCase() === 'no') return { options: [...YES_NO] };
+  if (options.length < 2 || options.length > MAX_POLL_OPTIONS) return { error: `A poll needs 2 to ${MAX_POLL_OPTIONS} options, or just \`yes/no\`.` };
   if (options.some((o) => o.length > MAX_OPTION_LEN)) return { error: `Each poll option can be at most ${MAX_OPTION_LEN} characters.` };
   if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) return { error: 'Poll options must all be different.' };
   return { options };

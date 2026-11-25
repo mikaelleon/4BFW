@@ -131,7 +131,7 @@ if (schemaVersion < 7) {
       channel_id TEXT NOT NULL,
       PRIMARY KEY (guild_id, tag)
     );
-    -- one reaction per person per post: kind is 'up', 'down' or 'heart'
+    -- one reaction per person per post: kind is 'up' or 'down' (hearts were removed in v12)
     CREATE TABLE IF NOT EXISTS reactions (
       confession_id INTEGER NOT NULL,
       user_id       TEXT NOT NULL,
@@ -270,6 +270,12 @@ if (schemaVersion < 11) {
     PRAGMA user_version = 11;
   `);
   schemaVersion = 11;
+}
+
+// v12: the heart reaction is gone; drop the old ones so they stop counting anywhere.
+if (schemaVersion < 12) {
+  db.exec("DELETE FROM reactions WHERE kind = 'heart'; PRAGMA user_version = 12;");
+  schemaVersion = 12;
 }
 
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
@@ -643,7 +649,7 @@ export function toggleReaction(confessionId, userId, kind) {
 }
 
 export function reactionCounts(confessionId) {
-  const counts = { up: 0, down: 0, heart: 0 };
+  const counts = { up: 0, down: 0 };
   for (const r of db.prepare('SELECT kind, COUNT(*) AS n FROM reactions WHERE confession_id = ? GROUP BY kind').all(confessionId)) {
     counts[r.kind] = r.n;
   }
@@ -679,20 +685,19 @@ export function pollCounts(confessionId) {
 
 /* ---------- highlights ---------- */
 
-/** Most-liked post (👍 + ❤️, fewest 👎 breaks ties, then the older one) created at or after `since`. Null when nobody liked anything. */
+/** Most-liked post (👍, fewest 👎 breaks ties, then the older one) created at or after `since`. Null when nobody liked anything. */
 export function topLikedSince(guildId, since) {
   return (
     db
       .prepare(
         `SELECT c.*,
-                COALESCE(SUM(r.kind = 'up'), 0)    AS ups,
-                COALESCE(SUM(r.kind = 'heart'), 0) AS hearts,
-                COALESCE(SUM(r.kind = 'down'), 0)  AS downs
+                COALESCE(SUM(r.kind = 'up'), 0)   AS ups,
+                COALESCE(SUM(r.kind = 'down'), 0) AS downs
            FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
           WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
           GROUP BY c.id
-         HAVING ups + hearts > 0
-          ORDER BY ups + hearts DESC, downs ASC, c.id ASC
+         HAVING ups > 0
+          ORDER BY ups DESC, downs ASC, c.id ASC
           LIMIT 1`,
       )
       .get(guildId, since) ?? null

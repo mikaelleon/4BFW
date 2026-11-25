@@ -304,7 +304,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
     }
 
-    // 👍 👎 ❤️ and poll-option buttons under a submission.
+    // 👍 👎 and poll-option buttons under a submission.
     if (interaction.isButton() && interaction.customId.startsWith(`${REACT_PREFIX}:`)) return handleReactionButton(interaction);
     if (interaction.isButton() && interaction.customId.startsWith(`${VOTE_PREFIX}:`)) return handleVoteButton(interaction);
 

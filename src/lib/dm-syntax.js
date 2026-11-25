@@ -33,9 +33,10 @@ export function parseDmPost(raw) {
   const p = text.match(/^poll(?:\s+(\d{1,3})\s*h)?\s*:\s*([\s\S]*)$/i);
   if (p) {
     const [question, ...options] = p[2].split('|').map((s) => s.trim()).filter(Boolean);
-    const parsed = parsePollOptions(options.join('\n'));
+    // No options = a yes/no question.
+    const parsed = options.length ? parsePollOptions(options.join('\n')) : { options: ['Yes', 'No'] };
     if (!question) error = 'A poll needs a question: `poll: Question? | Option A | Option B`';
-    else if (parsed.error || !parsed.options) error = parsed.error ?? 'A poll needs 2 to 5 options: `poll: Question? | Option A | Option B`';
+    else if (parsed.error || !parsed.options) error = parsed.error ?? 'A poll needs 2 to 5 options: `poll: Question? | Option A | Option B` (or just `poll: Question?` for yes/no)';
     else {
       text = question;
       pollOptions = parsed.options;

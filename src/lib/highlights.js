@@ -35,7 +35,7 @@ async function postHighlight(guild, cfg, period, row) {
     .setColor(tag?.color ?? row.color ?? 0xf0b232)
     .setAuthor({ name: `🏆 Confession of the ${period.label}` })
     .setTitle(anonTitle(row.number))
-    .setDescription(`${renderBody(row.rendered ?? row.content ?? '', row.cw)}\n\n👍 **${row.ups}**  ❤️ **${row.hearts}**  👎 **${row.downs}**  ·  [Jump to post](${url})`.trim())
+    .setDescription(`${renderBody(row.rendered ?? row.content ?? '', row.cw)}\n\n👍 **${row.ups}**  👎 **${row.downs}**  ·  [Jump to post](${url})`.trim())
     .setImage(`attachment://${files.imageName}`);
   if (tag) embed.setFooter({ text: tagText(row.tag) });
   await channel.send({

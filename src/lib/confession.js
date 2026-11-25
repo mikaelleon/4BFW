@@ -29,9 +29,13 @@ export const MODAL_ID = 'confess:modal';
 export { prefix };
 export const REPLY_BUTTON_ID = 'confess:reply';
 export const REPORT_BUTTON_ID = 'confess:report';
-export const REACT_PREFIX = 'confess:react'; // "confess:react:up|down|heart"
+export const REACT_PREFIX = 'confess:react'; // "confess:react:up|down"
 export const VOTE_PREFIX = 'confess:vote'; // "confess:vote:<option index>"
 export const MAX_POLL_OPTIONS = 5;
+export const YES_NO = ['Yes', 'No'];
+const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+/** A poll whose options are exactly Yes / No gets ✅ ❌ buttons; anything else gets numbered buttons. */
+export const isYesNo = (options) => options.length === 2 && options[0].label.toLowerCase() === 'yes' && options[1].label.toLowerCase() === 'no';
 export const CLOSE_POLL_ID = 'confess:closepoll';
 export const APPROVAL_PREFIX = 'approval'; // buttons "approval:<ok|no>:<confession id>" on a pending submission
 const jumpUrl = (guildId, row) => `https://discord.com/channels/${guildId}/${row.channel_id}/${row.message_id}`;
@@ -62,6 +66,9 @@ export function confessionEmbed(number, content, color, imageName = PAD_NAME, ta
   if (content) embed.setDescription(content);
   const text = tagText(tag);
   if (text) embed.setAuthor({ name: text }); // the topic, shown above the title
+  if (poll.options?.length) {
+    embed.addFields({ name: 'Options', value: poll.options.map((o, i) => `${NUMBER_EMOJI[i]} ${o.label}`).join('\n') });
+  }
   if (poll.closed) embed.addFields({ name: 'Poll', value: 'Closed. Results are in the reply below.' });
   else if (poll.endsAt) embed.addFields({ name: 'Poll', value: `Closes <t:${Math.floor(poll.endsAt / 1000)}:R>` });
   return embed;
@@ -70,9 +77,11 @@ export function confessionEmbed(number, content, color, imageName = PAD_NAME, ta
 /** The whole public post (embed, files, buttons) for a stored row. Used to post, restore and re-render. */
 export function buildPost(row, image) {
   const { files, imageName } = postFiles(image, row.cw);
+  const pollOptions = row.is_poll ? db.getPollOptions(row.id) : null;
   const embed = confessionEmbed(row.number, renderBody(row.rendered ?? row.content, row.cw), row.color ?? COLOR, imageName, row.tag, {
     endsAt: row.poll_ends_at,
     closed: Boolean(row.poll_closed_at),
+    options: pollOptions && !isYesNo(pollOptions) ? pollOptions : null, // listed in the embed; the buttons just carry numbers
   });
   return { embeds: [embed], files, components: postComponents(row), allowedMentions: { parse: [] } };
 }
@@ -83,7 +92,7 @@ const reactionButton = (kind, emoji, count) => {
 };
 
 /**
- * Buttons under a post: Reply, Report and the 👍 👎 ❤️ counters, plus one button per option for a poll.
+ * Buttons under a post: Reply, Report and the 👍 👎 counters, plus a poll row: ✅ Yes / ❌ No, or 1️⃣ 2️⃣ … for several options.
  * No confession ID in any custom id: the target is read from the message the button sits on.
  * Rebuilt from the database whenever a count changes.
  */
@@ -95,22 +104,23 @@ export function postComponents(row) {
       new ButtonBuilder().setCustomId(REPORT_BUTTON_ID).setLabel('Report').setStyle(ButtonStyle.Secondary),
       reactionButton('up', '👍', counts.up),
       reactionButton('down', '👎', counts.down),
-      reactionButton('heart', '❤️', counts.heart),
     ),
   ];
   if (row.is_poll) {
     const closed = Boolean(row.poll_closed_at);
     const votes = db.pollCounts(row.id);
     const options = db.getPollOptions(row.id);
+    const yesNo = isYesNo(options);
     const total = options.reduce((sum, o) => sum + (votes.get(o.idx) ?? 0), 0);
     rows.push(
       new ActionRowBuilder().addComponents(
-        options.map((o) => {
+        options.map((o, i) => {
           const n = votes.get(o.idx) ?? 0;
           const share = total ? ` (${Math.round((n / total) * 100)}%)` : '';
           return new ButtonBuilder()
             .setCustomId(`${VOTE_PREFIX}:${o.idx}`)
-            .setLabel(`${o.label} · ${n}${share}`.slice(0, 80))
+            .setEmoji(yesNo ? (i === 0 ? '✅' : '❌') : NUMBER_EMOJI[i])
+            .setLabel(`${yesNo ? `${o.label} · ` : ''}${n}${share}`)
             .setStyle(closed ? ButtonStyle.Secondary : ButtonStyle.Primary)
             .setDisabled(closed);
         }),
@@ -241,7 +251,7 @@ export function confessModal(reply = null) {
     modal.addLabelComponents(
       new LabelBuilder()
         .setLabel('Poll options (optional)')
-        .setDescription(`One per line, 2 to ${MAX_POLL_OPTIONS} options. Leave empty for a normal post.`)
+        .setDescription(`Type yes/no for a yes-or-no question, or list 2 to ${MAX_POLL_OPTIONS} options, one per line. Empty = normal post.`)
         .setTextInputComponent(
           new TextInputBuilder().setCustomId('poll').setStyle(TextInputStyle.Paragraph).setMaxLength(300).setRequired(false),
         ),

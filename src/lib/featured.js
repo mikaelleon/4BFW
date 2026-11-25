@@ -1,4 +1,4 @@
-// Featured channel: once a post collects enough 👍 + ❤️ it is copied to a channel the admin picks (/setup featured).
+// Featured channel: once a post collects enough 👍 it is copied to a channel the admin picks (/setup featured).
 // The copy's counters follow later reactions; it is removed again if the original is deleted or hidden.
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import * as db from '../db.js';
@@ -15,7 +15,7 @@ function featuredEmbed(guildId, row, counts, imageName) {
     .setColor(tag?.color ?? row.color ?? 0xf0b232)
     .setAuthor({ name: '⭐ Featured submission' })
     .setTitle(anonTitle(row.number))
-    .setDescription(`${renderBody(row.rendered ?? row.content, row.cw)}\n\n👍 **${counts.up}**  ❤️ **${counts.heart}**  ·  [Jump to post](${jump(guildId, row)})`.trim())
+    .setDescription(`${renderBody(row.rendered ?? row.content, row.cw)}\n\n👍 **${counts.up}**  ·  [Jump to post](${jump(guildId, row)})`.trim())
     .setImage(`attachment://${imageName}`);
   if (tag) embed.setFooter({ text: tagText(row.tag) });
   return embed;
@@ -38,7 +38,7 @@ export async function maybeFeature(guild, row) {
     await channel?.messages.edit(fresh.featured_message_id, { embeds: [featuredEmbed(guild.id, fresh, counts, imageName)] }).catch(() => {});
     return;
   }
-  if (counts.up + counts.heart < (cfg.featured_threshold || 5) || busy.has(fresh.id)) return;
+  if (counts.up < (cfg.featured_threshold || 5) || busy.has(fresh.id)) return;
 
   busy.add(fresh.id);
   try {
