@@ -1,14 +1,14 @@
 // The DMs a moderated user receives: warning, ban and removal. They share one layout so they read alike:
 // what happened, why, which post, where they stand, and what they can do next.
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
-import { anonRef, anonTitle, formatDateTime, prefix } from './format.js';
+import { anonRef, anonTitle, formatDateTime } from './format.js';
 
 export const RULES_PREFIX = 'rules'; // button "rules:<guildId>" opens the guide's rules page
+export const APPEAL_FORM_PREFIX = 'appealform'; // button "appealform:<guildId>" starts the appeal form (see appeals.js)
 
 const COLORS = { yellow: 0xfee75c, orange: 0xe67e22, red: 0xed4245 };
 const SQUARES = { yellow: '🟨', orange: '🟧', red: '🟥' };
-const RULES_BUTTON_TEXT = 'Read the rules before your next post (button below)';
-const SAFE_NOTE = 'You can still read the channel, but you can no longer post in this server.';
+const RULES_BUTTON_TEXT = 'Read the rules before your next post (button below)';const SAFE_NOTE = 'You can still read the channel, but you can no longer post in this server.';
 
 /** Warning id as users see it: 42 -> "W-0042". */
 export const warningCode = (id) => `W-${String(id).padStart(4, '0')}`;
@@ -38,19 +38,28 @@ function progressBar(count, limit, color) {
   return `${SQUARES[color].repeat(Math.min(count, limit))}${'⬜'.repeat(Math.max(0, limit - count))}`;
 }
 
-function build(guild, color, title, lines) {
+/** `appeal` = also add the Appeal button (warning and ban DMs; a plain removal has nothing to appeal). */
+function build(guild, color, title, lines, appeal = false) {
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
     .setDescription(lines.join('\n'))
     .setFooter({ text: `4BFW • ${formatDateTime()}` });
   const rules = new ButtonBuilder().setCustomId(`${RULES_PREFIX}:${guild.id}`).setLabel('Read the rules').setStyle(ButtonStyle.Secondary);
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(rules)] };
+  const row = new ActionRowBuilder().addComponents(rules);
+  if (appeal) row.addComponents(new ButtonBuilder().setCustomId(`${APPEAL_FORM_PREFIX}:${guild.id}`).setLabel('Appeal').setStyle(ButtonStyle.Primary));
+  return { embeds: [embed], components: [row] };
 }
 
 const reasonLine = (reason) => `**Reason:** ${reason ?? 'No reason given'}`;
 // Only the public number is shown: the admin-only Submission ID never reaches users.
-const postLine = (row) => `**Post:** “${excerpt(row.content)}” (${anonRef(row.number)})`;
+// The text itself is not repeated in the DM: link to the post, or to its channel once the post is gone (a deleted message's link is dead).
+function postLine(guild, row, gone) {
+  const label = anonRef(row.number);
+  if (!row.channel_id) return `**Post:** ${label}`;
+  if (gone || !row.message_id) return `**Post:** ${label} in <#${row.channel_id}>`;
+  return `**Post:** [${label}](https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id})`;
+}
 const removed = (deleted) => (deleted ? ' and has been removed' : '');
 
 /**
@@ -64,7 +73,7 @@ export function warningNotice(guild, row, { reason, warningId, count, limit, exp
     `${lead} **${anonTitle(row.number)}** was found to violate our community guidelines${removed(deleted)}.`,
     '',
     reasonLine(reason),
-    postLine(row),
+    postLine(guild, row, deleted),
     '',
   ];
 
@@ -82,9 +91,9 @@ export function warningNotice(guild, row, { reason, warningId, count, limit, exp
     '',
     '**What you can do**',
     `- ${RULES_BUTTON_TEXT}`,
-    `- Think this was a mistake? Appeal with \`/appeal ${warningCode(warningId)}\``,
+    '- Think this was a mistake? Press **Appeal** below.',
   );
-  return build(guild, COLORS[banned ? 'red' : color], `Warning in ${guild.name}`, lines);
+  return build(guild, COLORS[banned ? 'red' : color], `Warning in ${guild.name}`, lines, true);
 }
 
 /** Ban DM. `until` = Discord timestamp text for a timed ban, or null for a permanent one. */
@@ -93,14 +102,14 @@ export function banNotice(guild, row, { reason, until = null, deleted = false })
     `Your **${anonTitle(row.number)}** was found to violate our community guidelines${removed(deleted)}, and posting has been disabled.`,
     '',
     reasonLine(reason),
-    postLine(row),
+    postLine(guild, row, deleted),
     '',
     `**Posting disabled:** ${until ? `until ${until}` : 'permanently'}. ${SAFE_NOTE}`,
     '',
     '**What you can do**',
     `- ${RULES_BUTTON_TEXT}`,
-    `- Think this was a mistake? Reply here with \`${prefix()} appeal <why>\` and a moderator will review it.`,
-  ]);
+    '- Think this was a mistake? Press **Appeal** below and a moderator will review it.',
+  ], true);
 }
 
 /** Removal DM (a moderator deleted the post without warning or banning). */
@@ -109,7 +118,7 @@ export function deletionNotice(guild, row, { reason }) {
     `Your **${anonTitle(row.number)}** was found to violate our community guidelines and has been removed.`,
     '',
     reasonLine(reason),
-    postLine(row),
+    postLine(guild, row, true),
     '',
     '**Warning:** none. A removal on its own does not count towards the warning limit.',
     '',

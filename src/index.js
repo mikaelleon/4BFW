@@ -48,9 +48,17 @@ import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './li
 import { startScheduler } from './lib/scheduler.js';
 import { startBackups } from './lib/backup.js';
 import { GUIDE_PREFIX, RULES_PAGE, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
-import { APPEAL_PREFIX, handleAppealButton } from './lib/appeals.js';
+import {
+  APPEAL_MODAL_PREFIX,
+  APPEAL_PICK_PREFIX,
+  APPEAL_PREFIX,
+  handleAppealButton,
+  handleAppealFormButton,
+  handleAppealModal,
+  handleAppealPick,
+} from './lib/appeals.js';
 import { BAN_APPEAL_PREFIX, appealUsage, bannedGuildsOf, handleBanAppealButton, submitBanAppeal } from './lib/ban-appeals.js';
-import { RULES_PREFIX } from './lib/notices.js';
+import { APPEAL_FORM_PREFIX, RULES_PREFIX } from './lib/notices.js';
 
 // Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
 http
@@ -271,6 +279,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_PREFIX}:`)) {
       return handleAppealButton(interaction);
     }
+
+    // "Appeal" button in a warning / ban DM -> dropdown of what can be appealed -> pop-up with the reason.
+    if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_FORM_PREFIX}:`)) return handleAppealFormButton(interaction);
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${APPEAL_PICK_PREFIX}:`)) return handleAppealPick(interaction);
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPEAL_MODAL_PREFIX}:`)) return handleAppealModal(interaction);
 
     // "Read the rules" button in a warning, ban or removal DM: opens the guide on its Rules page as a new message.
     if (interaction.isButton() && interaction.customId.startsWith(`${RULES_PREFIX}:`)) {
