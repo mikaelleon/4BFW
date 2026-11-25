@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import './restore.js'; // must stay before db.js: restores the DB from the backup channel if the disk was wiped
 import {
   ActionRowBuilder,
   Client,
@@ -33,6 +34,7 @@ import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/con
 import { handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
+import { startBackups } from './lib/backup.js';
 import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
 
 // Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
@@ -68,6 +70,7 @@ client.once(Events.ClientReady, async (c) => {
     if (guild) await ensureSticky(guild).catch((err) => console.error(`Sticky check failed for ${guild.id}:`, err));
   }
   startScheduler(c);
+  startBackups(c);
   catchUpDms(c).catch((err) => console.error('DM catch-up failed:', err));
   // Online notices are slow (throttled DMs), so run them after the sticky checks and in the background.
   for (const cfg of db.configuredGuilds()) {

@@ -168,6 +168,11 @@ if (schemaVersion < 8) {
 // Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
 db.exec('CREATE TABLE IF NOT EXISTS dm_cursor (user_id TEXT PRIMARY KEY, last_id TEXT NOT NULL)');
 
+/** Write a consistent copy of the whole database to `path` (must not exist yet). Used by the backup job. */
+export function snapshotTo(path) {
+  db.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+}
+
 export function getDmCursor(userId) {
   return db.prepare('SELECT last_id FROM dm_cursor WHERE user_id = ?').get(userId)?.last_id ?? null;
 }
