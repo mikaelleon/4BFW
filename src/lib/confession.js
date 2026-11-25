@@ -137,7 +137,7 @@ async function notifyReplies(client, guild, targets, replierId, content, url) {
     .join('\n');
   const notified = new Set();
   for (const target of targets) {
-    if (target.author_id === replierId || notified.has(target.author_id)) continue;
+    if (!target.author_id || target.author_id === replierId || notified.has(target.author_id)) continue; // empty = purged
     notified.add(target.author_id);
     await dmUser(
       client,
@@ -369,6 +369,7 @@ export async function hideConfessionMessage(guild, row) {
 
 /** Put a hidden post back exactly as it was (text, color, image) and clear its reports. */
 export async function restoreConfessionMessage(guild, row) {
+  if (row.purged_at) return false; // the text is gone (data retention), so there is nothing to put back
   const msg = await fetchPostMessage(guild, row);
   if (!msg) return false;
   const image = row.has_image ? db.getConfessionImage(row.id) : null;

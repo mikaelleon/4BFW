@@ -7,6 +7,7 @@ const running = new Set();
 
 export const GUIDE_PREFIX = 'guide';
 const PAGES = ['Overview', 'How to Use', 'Rules (P1)', 'Rules (P2)', 'Terms of Use', 'Privacy Policy'];
+export const RULES_PAGE = 2; // index of "Rules (P1)", where the "Read the rules" button in warning DMs lands
 
 function overviewPage({ cfg }) {
   const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';

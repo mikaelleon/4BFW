@@ -35,7 +35,10 @@ import { handleReactionButton, handleVoteButton, parsePollOptions } from './lib/
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
 import { startBackups } from './lib/backup.js';
-import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
+import { GUIDE_PREFIX, RULES_PAGE, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
+import { APPEAL_PREFIX, handleAppealButton } from './lib/appeals.js';
+import { BAN_APPEAL_PREFIX, appealUsage, bannedGuildsOf, handleBanAppealButton, submitBanAppeal } from './lib/ban-appeals.js';
+import { RULES_PREFIX } from './lib/notices.js';
 
 // Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
 http
@@ -90,6 +93,24 @@ async function handleDm(message, catchUp = false) {
 
   const text = (match[1] ?? '').trim();
   const dm = (content) => message.author.send(content).catch(() => {});
+
+  // "fw appeal <why>" from a banned user goes to the moderators. Anyone who is not banned anywhere: it is just a post.
+  const appeal = text.match(/^appeal(?:\s+([\s\S]*))?$/i);
+  if (appeal) {
+    const banned = await bannedGuildsOf(client, message.author.id);
+    if (banned.length) {
+      const why = (appeal[1] ?? '').trim();
+      if (!why) return dm(appealUsage());
+      if (banned.length === 1) return dm(await submitBanAppeal(banned[0], message.author, why));
+      const token = randomUUID().slice(0, 8);
+      pending.set(token, { userId: message.author.id, appealText: why, expires: Date.now() + 5 * 60_000 });
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`confess:pick:${token}`)
+        .setPlaceholder('Which server?')
+        .addOptions(banned.slice(0, 25).map((g) => ({ label: g.name.slice(0, 100), value: g.id })));
+      return message.author.send({ content: 'You are banned in several servers. Which ban are you appealing?', components: [new ActionRowBuilder().addComponents(menu)] }).catch(() => {});
+    }
+  }
 
   const guilds = await candidateGuilds(client, message.author.id);
   if (guilds.length === 0) return dm('I found no server you are in that has submissions set up.');
@@ -202,6 +223,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return handleReasonModal(interaction);
     }
 
+    // Lift / Deny buttons on a ban appeal in the mod log.
+    if (interaction.isButton() && interaction.customId.startsWith(`${BAN_APPEAL_PREFIX}:`)) {
+      return handleBanAppealButton(interaction);
+    }
+
+    // Overturn / Uphold buttons on a warning appeal in the mod log.
+    if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_PREFIX}:`)) {
+      return handleAppealButton(interaction);
+    }
+
+    // "Read the rules" button in a warning, ban or removal DM: opens the guide on its Rules page as a new message.
+    if (interaction.isButton() && interaction.customId.startsWith(`${RULES_PREFIX}:`)) {
+      const guild = client.guilds.cache.get(interaction.customId.split(':')[1]);
+      if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
+      return interaction.reply(guidePayload(guild, RULES_PAGE));
+    }
+
     // Guide page buttons ("guide:<guildId>:<page>"), in DMs or ephemeral /guide replies.
     if (interaction.isButton() && interaction.customId.startsWith(`${GUIDE_PREFIX}:`)) {
       const [, guildId, page] = interaction.customId.split(':');
@@ -272,9 +310,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.update({ content: 'That request expired. Send your submission again.', components: [] });
       }
       pending.delete(token);
-      await interaction.update({ content: 'Posting...', components: [] });
+      const appealing = entry.appealText !== undefined;
+      await interaction.update({ content: appealing ? 'Sending your appeal...' : 'Posting...', components: [] });
       const guild = client.guilds.cache.get(interaction.values[0]);
       if (!guild) return interaction.editReply('I can no longer reach that server.');
+      if (appealing) return interaction.editReply(await submitBanAppeal(guild, interaction.user, entry.appealText));
       const res = await submitConfession(guild, interaction.user.id, entry.text, null, entry.image);
       return interaction.editReply(
         res.ok ? `Posted as **${anonTitle(res.number)}** in **${guild.name}**.${entry.note ? `\n${entry.note}` : ''}` : res.error,

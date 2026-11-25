@@ -22,7 +22,7 @@ function quote(text) {
  * and the time. Fixed width (see pad.js), shared embed color, no footer.
  * `controls: true` adds the Warn / Delete / Ban buttons (used on new-submission entries).
  */
-export async function modLog(guild, { title, id, subId, number, actor, reason, url, content, authorId, hasImage, controls = false, fields = [], ping = null }) {
+export async function modLog(guild, { title, id, subId, number, actor, reason, url, content, authorId, hasImage, controls = false, components = null, fields = [], ping = null }) {
   const cfg = db.getGuild(guild.id);
   if (!cfg?.log_channel_id) return;
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
@@ -39,8 +39,9 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .addFields(
-      { name: 'Submission ID', value: `\`${subId ?? id}\``, inline: true }, // per-server number; `id` is the internal key
-      { name: 'Public number', value: anonRef(number), inline: true },
+      // Entries that are not about one post (a ban appeal) have no ID and number.
+      (subId ?? id) != null ? { name: 'Submission ID', value: `\`${subId ?? id}\``, inline: true } : BLANK, // per-server number; `id` is the internal key
+      (subId ?? id) != null ? { name: 'Public number', value: anonRef(number), inline: true } : BLANK,
       actor ? { name: 'Moderator', value: `<@${actor.id}>`, inline: true } : BLANK,
       authorId ? { name: 'Sender ID', value: `||${authorId}||`, inline: true } : BLANK,
       { name: 'Timestamp', value: formatDateTime(), inline: true },
@@ -59,9 +60,10 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
     files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
     allowedMentions: ping ? { roles: [ping] } : { parse: [] },
   };
-  if (controls) {
+  if (components) payload.components = components; // e.g. the Overturn / Uphold buttons on an appeal
+  else if (controls) {
     const row = db.getConfession(guild.id, id);
-    if (row) payload.components = [controlsRow(row, Boolean(db.getBan(guild.id, row.author_id)))];
+    if (row) payload.components = [controlsRow(row, Boolean(db.getBan(guild.id, row.author_key)))];
   }
   await channel.send(payload).catch(() => {});
 }
@@ -75,10 +77,12 @@ export async function systemLog(guild, title, description) {
   await channel?.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
+/** `embed` = one EmbedBuilder, or a ready message payload ({ embeds, components }). */
 export async function dmUser(client, userId, embed) {
+  if (!userId) return false; // sender ID already purged (data retention)
   try {
     const user = await client.users.fetch(userId);
-    await user.send({ embeds: [embed] });
+    await user.send(embed?.embeds ? embed : { embeds: [embed] });
     return true;
   } catch {
     return false;

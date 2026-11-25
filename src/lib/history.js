@@ -22,7 +22,7 @@ function section(items, render, empty) {
 
 export function historyEmbed(guild, row) {
   const cfg = db.getGuild(guild.id);
-  const userId = row.author_id;
+  const userId = row.author_key; // history is looked up by key, so it still works after the raw ID is purged
   const posts = db.listConfessionsByAuthor(guild.id, userId);
   const warnings = db.listWarnings(guild.id, userId);
   const notes = db.listNotes(guild.id, userId);
@@ -36,7 +36,7 @@ export function historyEmbed(guild, row) {
   return new EmbedBuilder()
     .setColor(COLOR)
     .setTitle(`History for the author of submission ${row.id}`)
-    .setDescription(`Sender ID: ||${userId}||\n${banText}\nActive warnings: **${active}/${cfg.warn_limit}**${expiry}`)
+    .setDescription(`Sender ID: ${row.author_id ? `||${row.author_id}||` : '*(purged)*'}\n${banText}\nActive warnings: **${active}/${cfg.warn_limit}**${expiry}`)
     .addFields(
       {
         name: `Submissions (${posts.length}: ${statusCount('posted')} posted, ${statusCount('hidden')} hidden, ${statusCount('deleted')} deleted)`,

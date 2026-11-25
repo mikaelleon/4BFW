@@ -49,7 +49,12 @@ Admins find the ID in the mod log (every new confession is logged with both), vi
 
 ## Notes
 
-- The bot stores the author ID privately per confession (needed for warn/ban). The guide tells users this. Anyone with access to `data/confessions.db` can see it, so protect that file.
+- The bot stores the author ID privately per confession (needed to DM the author about warnings and replies). The guide tells users this. Anyone with access to `data/confessions.db` can see it, so protect that file.
+- **Hashed IDs:** warnings, bans, notes, votes and reports are stored under a keyed hash of `server:user`, not the raw Discord ID. Set `ID_HASH_SECRET` in `.env` (any long random string) and **never change it**: a different secret makes every stored ban and warning stop matching its user (the bot logs a warning at startup if the secret changed). Without it the secret is derived from `DISCORD_TOKEN`.
+- **Data retention:** `/setup options retention_days:N` erases the sender ID, text and image of posts older than N days (checked hourly). The post stays in the channel; IDs, bans and warnings keep working. Mod-log entries already posted in Discord are not touched.
+- **Self-delete:** authors can right-click their own post > Apps > **Delete my submission** within `/setup options self_delete_minutes` (default 10, 0 = off).
+- **Ban appeals:** a banned user DMs the bot `fw appeal <why>`; the mod log gets the appeal with **Lift ban** / **Deny** buttons.
+- `/setup refreshposts [count]` adds the current buttons (Report, reactions, poll) to older posts.
 - Mass DMs can get a bot flagged by Discord. `/announce` is slow on purpose; use it sparingly.
 - Mentions in confessions never ping (`allowedMentions` is empty).
 
@@ -58,3 +63,9 @@ Admins find the ID in the mod log (every new confession is logged with both), vi
 Every new submission is logged in the mod-log channel (`/setup modlog`) with its text, jump link, Submission ID, public number, spoilered sender ID and timestamp. Under each entry are **Warn**, **Delete** and **Ban** (**Unban** once the author is banned) buttons. Warn, Delete and Ban ask for an optional reason first; the same actions are available as `/mod` commands.
 
 `/setup modrole @role` lets that role use the buttons, `/mod` and the right-click **Submission ID** command without Manage Server. Setup commands (`/setup`, `/announce`) stay Manage Server only. If `/mod` is hidden from the role, allow it for them under Server Settings > Integrations. Keep the mod-log channel staff-only: it shows sender IDs.
+
+## Moderation notices and appeals
+
+Warning, ban and removal DMs share one layout: what happened, reason, a ~100-character excerpt of the post (public number only, never the admin Submission ID), where the user stands, and what they can do next, with a **Read the rules** button. Warnings are yellow at 1/3, orange at 2/3 and red at the limit, with a progress bar and a warning ID like `W-0042`. If warning expiry is on (`/setup options warn_expiry_days`), the DM says so.
+
+Users contest a warning with `/appeal W-0042 [message]`. The appeal appears in the mod log (pinging the moderator role) with **Overturn warning** / **Uphold** buttons; the user is DMed the result. Bans and removals tell the user to message a moderator (no command for those yet).

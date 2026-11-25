@@ -30,7 +30,7 @@ function guard(interaction) {
 /** Refresh the buttons on the log entry (Delete greys out, Ban/Unban swaps) and tell the moderator what happened. */
 async function finish(interaction, row, text) {
   const fresh = db.getConfession(interaction.guildId, row.id);
-  const banned = Boolean(db.getBan(interaction.guildId, fresh.author_id));
+  const banned = Boolean(db.getBan(interaction.guildId, fresh.author_key));
   await interaction.editReply({ components: [controlsRow(fresh, banned)] }).catch(() => {});
   await interaction.followUp({ content: text, flags: EPHEMERAL }).catch(() => {});
 }

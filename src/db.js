@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
+import { isKey, keyOf, secretFingerprint, userKey } from './lib/identity.js';
 
 mkdirSync('data', { recursive: true });
 const db = new DatabaseSync('data/confessions.db');
@@ -164,6 +165,90 @@ if (schemaVersion < 8) {
     PRAGMA user_version = 8;
   `);
 }
+// v9: appeals against warnings (one per warning; the warning id is shown to the user as W-0042).
+if (schemaVersion < 9) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS appeals (
+      warning_id  INTEGER PRIMARY KEY,
+      guild_id    TEXT NOT NULL,
+      user_id     TEXT NOT NULL,
+      message     TEXT,
+      status      TEXT NOT NULL DEFAULT 'open',
+      resolved_by TEXT,
+      created_at  INTEGER NOT NULL
+    );
+    PRAGMA user_version = 9;
+  `);
+  schemaVersion = 9;
+}
+// v10: privacy. Moderation records move from raw Discord IDs to keyed hashes (author_key, see lib/identity.js);
+// the raw sender ID stays on a confession only until the server's retention period ends. Also: self-delete window,
+// retention setting, and ban appeals (DM `fw appeal <text>`).
+if (schemaVersion < 10) {
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      ALTER TABLE confessions ADD COLUMN author_key TEXT;
+      ALTER TABLE confessions ADD COLUMN purged_at INTEGER;
+      ALTER TABLE bans ADD COLUMN dm_id TEXT;
+      ALTER TABLE guilds ADD COLUMN self_delete_minutes INTEGER NOT NULL DEFAULT 10;
+      ALTER TABLE guilds ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS ban_appeals (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id    TEXT NOT NULL,
+        user_key    TEXT NOT NULL,
+        dm_id       TEXT,
+        message     TEXT,
+        status      TEXT NOT NULL DEFAULT 'open',
+        resolved_by TEXT,
+        created_at  INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_banappeal_user ON ban_appeals (guild_id, user_key);
+    `);
+    const each = (sql, fn) => db.prepare(sql).all().forEach(fn);
+    each('SELECT id, guild_id, author_id FROM confessions', (r) =>
+      db.prepare('UPDATE confessions SET author_key = ? WHERE id = ?').run(userKey(r.guild_id, r.author_id), r.id),
+    );
+    for (const table of ['warnings', 'mod_notes']) {
+      each(`SELECT id, guild_id, user_id FROM ${table}`, (r) => {
+        if (!isKey(r.user_id)) db.prepare(`UPDATE ${table} SET user_id = ? WHERE id = ?`).run(userKey(r.guild_id, r.user_id), r.id);
+      });
+    }
+    each('SELECT guild_id, user_id, expires_at FROM bans', (r) => {
+      if (isKey(r.user_id)) return;
+      // Timed bans keep the raw ID (until the retention purge) so the bot can DM when the ban ends.
+      db.prepare('UPDATE bans SET user_id = ?, dm_id = ? WHERE guild_id = ? AND user_id = ?').run(
+        userKey(r.guild_id, r.user_id), r.expires_at ? r.user_id : null, r.guild_id, r.user_id,
+      );
+    });
+    for (const [table, col] of [['reactions', 'user_id'], ['poll_votes', 'user_id'], ['reports', 'reporter_id']]) {
+      each(`SELECT t.confession_id AS cid, t.${col} AS uid, c.guild_id AS gid FROM ${table} t JOIN confessions c ON c.id = t.confession_id`, (r) => {
+        if (!isKey(r.uid)) db.prepare(`UPDATE ${table} SET ${col} = ? WHERE confession_id = ? AND ${col} = ?`).run(userKey(r.gid, r.uid), r.cid, r.uid);
+      });
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  db.exec('PRAGMA user_version = 10');
+  schemaVersion = 10;
+}
+
+// Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
+db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+{
+  const fp = secretFingerprint();
+  const stored = db.prepare("SELECT value FROM meta WHERE key = 'idkey_fp'").get()?.value;
+  if (!stored) db.prepare("INSERT INTO meta (key, value) VALUES ('idkey_fp', ?)").run(fp);
+  else if (stored !== fp) {
+    console.error(
+      'WARNING: the ID hash secret is different from the one this database was written with (ID_HASH_SECRET or DISCORD_TOKEN changed).\n' +
+        'Existing bans, warnings and notes will NOT match their users any more. Restore the old secret.',
+    );
+  }
+}
 
 // Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
 db.exec('CREATE TABLE IF NOT EXISTS dm_cursor (user_id TEXT PRIMARY KEY, last_id TEXT NOT NULL)');
@@ -184,7 +269,7 @@ export function setDmCursor(userId, lastId) {
 /** Everyone the bot has talked to: past authors plus anyone with a cursor. */
 export function knownDmUsers() {
   return db
-    .prepare('SELECT author_id AS id FROM confessions UNION SELECT user_id AS id FROM dm_cursor')
+    .prepare("SELECT author_id AS id FROM confessions WHERE author_id != '' UNION SELECT user_id AS id FROM dm_cursor")
     .all()
     .map((r) => r.id);
 }
@@ -194,7 +279,7 @@ export function knownDmUsers() {
 const GUILD_FIELDS = new Set([
   'channel_id', 'log_channel_id', 'role_id', 'mod_role_id', 'sticky_id', 'cooldown', 'warn_limit', 'welcome_dm',
   'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days', 'highlight_channel_id', 'highlight_period',
-  'highlight_daily_at', 'highlight_weekly_at',
+  'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days',
 ]);
 
 export function getGuild(guildId) {
@@ -224,8 +309,8 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
     const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
     const { next: subId } = db.prepare('SELECT COALESCE(MAX(sub_id), 0) + 1 AS next FROM confessions WHERE guild_id = ?').get(guildId);
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO confessions (guild_id, number, author_id, content, has_image, created_at, tag, is_poll, sub_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(guildId, counter, authorId, content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0, subId);
+      .prepare('INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0, subId);
     extras.pollOptions?.forEach((label, idx) =>
       db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
     );
@@ -302,17 +387,43 @@ export function resetCounter(guildId, startAt = 1) {
 
 export function lastConfessionAt(guildId, userId) {
   const row = db
-    .prepare('SELECT MAX(created_at) AS t FROM confessions WHERE guild_id = ? AND author_id = ?')
-    .get(guildId, userId);
+    .prepare('SELECT MAX(created_at) AS t FROM confessions WHERE guild_id = ? AND author_key = ?')
+    .get(guildId, keyOf(guildId, userId));
   return row?.t ?? 0;
 }
 
 /* ---------- warnings & bans ---------- */
 
+/** Returns the new warning's id (shown to the user as W-0042). */
 export function addWarning(guildId, userId, confessionId, reason) {
-  db.prepare(
-    'INSERT INTO warnings (guild_id, user_id, confession_id, reason, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(guildId, userId, confessionId, reason ?? null, Date.now());
+  const result = db
+    .prepare('INSERT INTO warnings (guild_id, user_id, confession_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(guildId, keyOf(guildId, userId), confessionId, reason ?? null, Date.now());
+  return Number(result.lastInsertRowid);
+}
+
+export function getWarning(id) {
+  return db.prepare('SELECT * FROM warnings WHERE id = ?').get(id);
+}
+
+export function deleteWarning(id) {
+  return db.prepare('DELETE FROM warnings WHERE id = ?').run(id).changes > 0;
+}
+
+/* ---------- appeals ---------- */
+
+export function addAppeal(warningId, guildId, userId, message) {
+  db.prepare('INSERT INTO appeals (warning_id, guild_id, user_id, message, created_at) VALUES (?, ?, ?, ?, ?)').run(
+    warningId, guildId, userId, message ?? null, Date.now(),
+  );
+}
+
+export function getAppeal(warningId) {
+  return db.prepare('SELECT * FROM appeals WHERE warning_id = ?').get(warningId);
+}
+
+export function resolveAppeal(warningId, status, resolvedBy) {
+  db.prepare('UPDATE appeals SET status = ?, resolved_by = ? WHERE warning_id = ?').run(status, resolvedBy, warningId);
 }
 
 const DAY_MS = 86_400_000;
@@ -327,7 +438,7 @@ function warningCutoff(guildId) {
 export function countWarnings(guildId, userId) {
   return db
     .prepare('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND user_id = ? AND created_at > ?')
-    .get(guildId, userId, warningCutoff(guildId)).n;
+    .get(guildId, keyOf(guildId, userId), warningCutoff(guildId)).n;
 }
 
 /** Every warning ever given, newest first, with whether it has expired. */
@@ -335,19 +446,21 @@ export function listWarnings(guildId, userId) {
   const cutoff = warningCutoff(guildId);
   return db
     .prepare('SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC')
-    .all(guildId, userId)
+    .all(guildId, keyOf(guildId, userId))
     .map((w) => ({ ...w, expired: w.created_at <= cutoff }));
 }
 
 export function clearWarnings(guildId, userId) {
-  db.prepare('DELETE FROM warnings WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
+  db.prepare('DELETE FROM warnings WHERE guild_id = ? AND user_id = ?').run(guildId, keyOf(guildId, userId));
 }
 
 /** `expiresAt` = epoch ms when the ban lifts itself, or null for a permanent ban. */
-export function banUser(guildId, userId, reason, bannedBy, expiresAt = null) {
+export function banUser(guildId, userId, reason, bannedBy, expiresAt = null, dmId = null) {
+  // dm_id (raw ID) is kept only for timed bans, so the bot can DM when one ends. The retention purge clears it.
+  const raw = expiresAt ? (dmId || (isKey(userId) ? null : userId)) : null;
   db.prepare(
-    'INSERT OR REPLACE INTO bans (guild_id, user_id, reason, banned_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(guildId, userId, reason ?? null, bannedBy ?? null, Date.now(), expiresAt);
+    'INSERT OR REPLACE INTO bans (guild_id, user_id, reason, banned_by, created_at, expires_at, dm_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(guildId, keyOf(guildId, userId), reason ?? null, bannedBy ?? null, Date.now(), expiresAt, raw);
 }
 
 /** Remove and return every ban whose time is up (the scheduler tells the user and the mods). */
@@ -359,29 +472,37 @@ export function takeExpiredBans() {
 }
 
 export function unbanUser(guildId, userId) {
-  return db.prepare('DELETE FROM bans WHERE guild_id = ? AND user_id = ?').run(guildId, userId).changes > 0;
+  return db.prepare('DELETE FROM bans WHERE guild_id = ? AND user_id = ?').run(guildId, keyOf(guildId, userId)).changes > 0;
 }
 
 /** The active ban, or undefined. A timed ban whose time has passed counts as lifted even before the scheduler runs. */
 export function getBan(guildId, userId) {
   return db
     .prepare('SELECT * FROM bans WHERE guild_id = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)')
-    .get(guildId, userId, Date.now());
+    .get(guildId, keyOf(guildId, userId), Date.now());
 }
 
 /* ---------- reports ---------- */
+
+/** Reactions, votes and reports are stored under the person's key for that server, never the raw ID. */
+function voterKey(confessionId, userId) {
+  const guildId = db.prepare('SELECT guild_id FROM confessions WHERE id = ?').get(confessionId)?.guild_id ?? '';
+  return keyOf(guildId, userId);
+}
 
 /** True when this is a new report (each person can report a post once). */
 export function addReport(confessionId, reporterId, reason) {
   return (
     db
       .prepare('INSERT OR IGNORE INTO reports (confession_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)')
-      .run(confessionId, reporterId, reason ?? null, Date.now()).changes > 0
+      .run(confessionId, voterKey(confessionId, reporterId), reason ?? null, Date.now()).changes > 0
   );
 }
 
 export function hasReported(confessionId, reporterId) {
-  return Boolean(db.prepare('SELECT 1 FROM reports WHERE confession_id = ? AND reporter_id = ?').get(confessionId, reporterId));
+  return Boolean(
+    db.prepare('SELECT 1 FROM reports WHERE confession_id = ? AND reporter_id = ?').get(confessionId, voterKey(confessionId, reporterId)),
+  );
 }
 
 export function countReports(confessionId) {
@@ -397,15 +518,15 @@ export function clearReports(confessionId) {
 export function addNote(guildId, userId, confessionId, note, moderatorId) {
   db.prepare(
     'INSERT INTO mod_notes (guild_id, user_id, confession_id, note, moderator_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(guildId, userId, confessionId, note, moderatorId, Date.now());
+  ).run(guildId, keyOf(guildId, userId), confessionId, note, moderatorId, Date.now());
 }
 
 export function listNotes(guildId, userId) {
-  return db.prepare('SELECT * FROM mod_notes WHERE guild_id = ? AND user_id = ? ORDER BY id DESC').all(guildId, userId);
+  return db.prepare('SELECT * FROM mod_notes WHERE guild_id = ? AND user_id = ? ORDER BY id DESC').all(guildId, keyOf(guildId, userId));
 }
 
 export function listConfessionsByAuthor(guildId, userId) {
-  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND author_id = ? ORDER BY id DESC').all(guildId, userId);
+  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND author_key = ? ORDER BY id DESC').all(guildId, keyOf(guildId, userId));
 }
 
 /* ---------- topic channels ---------- */
@@ -430,6 +551,7 @@ export function listTagChannels(guildId) {
 
 /** Click a reaction: same one again removes it, a different one switches. Returns the user's new reaction or null. */
 export function toggleReaction(confessionId, userId, kind) {
+  userId = voterKey(confessionId, userId);
   const current = db.prepare('SELECT kind FROM reactions WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.kind;
   if (current === kind) {
     db.prepare('DELETE FROM reactions WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
@@ -455,6 +577,7 @@ export function getPollOptions(confessionId) {
 
 /** Vote for option `idx`; the same option again withdraws the vote. Returns the new choice or null. */
 export function togglePollVote(confessionId, userId, idx) {
+  userId = voterKey(confessionId, userId);
   const current = db.prepare('SELECT idx FROM poll_votes WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.idx;
   if (current === idx) {
     db.prepare('DELETE FROM poll_votes WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
@@ -487,7 +610,7 @@ export function topLikedSince(guildId, since) {
                 COALESCE(SUM(r.kind = 'heart'), 0) AS hearts,
                 COALESCE(SUM(r.kind = 'down'), 0)  AS downs
            FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
-          WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL
+          WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
           GROUP BY c.id
          HAVING ups + hearts > 0
           ORDER BY ups + hearts DESC, downs ASC, c.id ASC
@@ -499,4 +622,66 @@ export function topLikedSince(guildId, since) {
 
 export function guildsWithHighlights() {
   return db.prepare("SELECT * FROM guilds WHERE highlight_channel_id IS NOT NULL AND highlight_period != 'off'").all();
+}
+
+/* ---------- retention ---------- */
+
+/**
+ * For every server with a retention period: wipe the sender ID, text and image of posts older than that, and the raw
+ * ID kept for timed-ban DMs. The row stays (IDs, numbers, status, key) so history, bans and warnings keep working.
+ * Returns how many posts were purged.
+ */
+export function purgeExpired() {
+  const now = Date.now();
+  let purged = 0;
+  for (const g of db.prepare('SELECT guild_id, retention_days FROM guilds WHERE retention_days > 0').all()) {
+    const cutoff = now - g.retention_days * DAY_MS;
+    db.exec('BEGIN');
+    try {
+      db.prepare(
+        'DELETE FROM confession_images WHERE confession_id IN (SELECT id FROM confessions WHERE guild_id = ? AND created_at < ? AND purged_at IS NULL)',
+      ).run(g.guild_id, cutoff);
+      purged += db
+        .prepare("UPDATE confessions SET author_id = '', content = '', rendered = NULL, purged_at = ? WHERE guild_id = ? AND created_at < ? AND purged_at IS NULL")
+        .run(now, g.guild_id, cutoff).changes;
+      db.prepare('UPDATE bans SET dm_id = NULL WHERE guild_id = ? AND created_at < ? AND dm_id IS NOT NULL').run(g.guild_id, cutoff);
+      db.prepare("UPDATE ban_appeals SET dm_id = NULL, message = NULL WHERE guild_id = ? AND created_at < ? AND status != 'open'").run(g.guild_id, cutoff);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+  return purged;
+}
+
+/* ---------- ban appeals (DM: fw appeal <text>) ---------- */
+
+export function addBanAppeal(guildId, userId, message) {
+  const r = db
+    .prepare('INSERT INTO ban_appeals (guild_id, user_key, dm_id, message, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(guildId, keyOf(guildId, userId), userId, message, Date.now());
+  return Number(r.lastInsertRowid);
+}
+
+export function getBanAppeal(id) {
+  return db.prepare('SELECT * FROM ban_appeals WHERE id = ?').get(id);
+}
+
+/** The user's newest appeal in this server, or undefined. */
+export function latestBanAppeal(guildId, userId) {
+  return db.prepare('SELECT * FROM ban_appeals WHERE guild_id = ? AND user_key = ? ORDER BY id DESC LIMIT 1').get(guildId, keyOf(guildId, userId));
+}
+
+export function resolveBanAppeal(id, status, resolvedBy) {
+  db.prepare('UPDATE ban_appeals SET status = ?, resolved_by = ?, resolved_at = ?, dm_id = NULL WHERE id = ?').run(status, resolvedBy, Date.now(), id);
+}
+
+/* ---------- refresh old posts ---------- */
+
+/** Newest still-visible posts of a server (for /setup refreshposts). */
+export function listRecentPosted(guildId, limit) {
+  return db
+    .prepare("SELECT * FROM confessions WHERE guild_id = ? AND status = 'posted' AND message_id IS NOT NULL AND channel_id IS NOT NULL ORDER BY id DESC LIMIT ?")
+    .all(guildId, limit);
 }

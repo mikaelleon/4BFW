@@ -10,12 +10,14 @@ import {
 import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
 import { COLOR, anonRef } from '../lib/format.js';
-import { refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
+import { postComponents, refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
 import { highlightTimers } from '../lib/highlights.js';
 import { tagChoices, tagText } from '../lib/tags.js';
 
 const serverOpt = (s) =>
   s.addStringOption((o) => o.setName('server').setDescription('Which server (only needed in DMs)').setAutocomplete(true));
+const refreshing = new Set(); // servers with a /setup refreshposts run in progress
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const textTypes = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
 
 async function pickChannel(interaction, guild) {
@@ -75,7 +77,7 @@ export default {
       serverOpt(
         s
           .setName('options')
-          .setDescription('Cooldown, warning limit and expiry, report limit, welcome DM')
+          .setDescription('Cooldown, warnings, reports, self-delete window, data retention, welcome DM')
           .addIntegerOption((o) => o.setName('cooldown').setDescription('Seconds between submissions per user').setMinValue(0).setMaxValue(3600))
           .addIntegerOption((o) => o.setName('warn_limit').setDescription('Warnings before an automatic submission ban').setMinValue(1).setMaxValue(20))
           .addIntegerOption((o) =>
@@ -83,6 +85,16 @@ export default {
           )
           .addIntegerOption((o) =>
             o.setName('report_limit').setDescription('Reports that auto-hide a post for review (0 = never auto-hide)').setMinValue(0).setMaxValue(50),
+          )
+          .addIntegerOption((o) =>
+            o.setName('self_delete_minutes').setDescription('Minutes an author can delete their own post (0 = not allowed)').setMinValue(0).setMaxValue(1440),
+          )
+          .addIntegerOption((o) =>
+            o
+              .setName('retention_days')
+              .setDescription('Erase sender ID, text and image of posts after this many days (0 = keep forever)')
+              .setMinValue(0)
+              .setMaxValue(3650),
           )
           .addBooleanOption((o) => o.setName('welcome_dm').setDescription('DM the guide to new members when they join')),
       ),
@@ -124,6 +136,14 @@ export default {
                 ),
             ),
         ),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        s
+          .setName('refreshposts')
+          .setDescription('Give older posts the current buttons (Report, reactions, poll)')
+          .addIntegerOption((o) => o.setName('count').setDescription('How many of the newest posts (default 50)').setMinValue(1).setMaxValue(200)),
       ),
     )
     .addSubcommand((s) => serverOpt(s.setName('view').setDescription('Show current settings')))
@@ -218,12 +238,21 @@ export default {
       const reportLimit = interaction.options.getInteger('report_limit');
       if (warnExpiry !== null) patch.warn_expiry_days = warnExpiry;
       if (reportLimit !== null) patch.report_limit = reportLimit;
+      const selfDelete = interaction.options.getInteger('self_delete_minutes');
+      const retention = interaction.options.getInteger('retention_days');
+      if (selfDelete !== null) patch.self_delete_minutes = selfDelete;
+      if (retention !== null) patch.retention_days = retention;
       if (cooldown !== null) patch.cooldown = cooldown;
       if (warnLimit !== null) patch.warn_limit = warnLimit;
       if (welcome !== null) patch.welcome_dm = welcome ? 1 : 0;
       if (!Object.keys(patch).length) return interaction.editReply('Nothing to change. Pass at least one option.');
       db.updateGuild(guild.id, patch);
-      return interaction.editReply('Options saved. Use `/setup view` to check.');
+      const warn =
+        retention > 0
+          ? `\nHeads up: posts older than ${retention} day${retention === 1 ? '' : 's'} lose their stored sender ID, text and image within the hour. ` +
+            'This cannot be undone, and the entries already in your mod log channel are not touched.'
+          : '';
+      return interaction.editReply(`Options saved. Use \`/setup view\` to check.${warn}`);
     }
 
     if (sub === 'reset_count') {
@@ -282,6 +311,40 @@ export default {
       );
     }
 
+    if (sub === 'refreshposts') {
+      if (refreshing.has(guild.id)) return interaction.editReply('A refresh is already running for this server.');
+      const rows = db.listRecentPosted(guild.id, interaction.options.getInteger('count') ?? 50);
+      if (!rows.length) return interaction.editReply('There are no posts to refresh.');
+      refreshing.add(guild.id);
+      await interaction.editReply(`Refreshing ${rows.length} post${rows.length === 1 ? '' : 's'}. This takes about ${Math.ceil(rows.length * 0.7)} seconds...`);
+      let done = 0;
+      let gone = 0;
+      let failed = 0;
+      try {
+        for (const row of rows) {
+          const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+          if (!channel) failed++;
+          else {
+            try {
+              await channel.messages.edit(row.message_id, { components: postComponents(row) });
+              done++;
+            } catch (err) {
+              if (err.code === 10008) {
+                db.markConfession(guild.id, row.id, 'deleted'); // the message was removed by hand
+                gone++;
+              } else failed++;
+            }
+          }
+          await sleep(700); // stay under Discord's edit rate limit
+        }
+      } finally {
+        refreshing.delete(guild.id);
+      }
+      return interaction.editReply(
+        `Done: ${done} refreshed${gone ? `, ${gone} were already deleted in Discord` : ''}${failed ? `, ${failed} failed (missing access?)` : ''}.`,
+      );
+    }
+
     if (sub === 'refresh') {
       if (!cfg?.channel_id) return interaction.editReply('Run `/setup channel` first.');
       await refreshSticky(guild);
@@ -310,6 +373,8 @@ export default {
         { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
         { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
+        { name: 'Self-delete window', value: c.self_delete_minutes > 0 ? `${c.self_delete_minutes} min` : 'Off', inline: true },
+        { name: 'Data retention', value: c.retention_days > 0 ? `${c.retention_days} days` : 'Keep forever', inline: true },
         { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },
         { name: 'Confession of the day / week', value: highlight, inline: true },
         { name: 'Topic channels', value: topicValue },

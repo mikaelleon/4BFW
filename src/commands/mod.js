@@ -111,8 +111,8 @@ export default {
           { name: 'Public number', value: anonRef(row.number), inline: true },
           { name: 'Status', value: row.status, inline: true },
           { name: 'Posted', value: time(Math.floor(row.created_at / 1000), 'R'), inline: true },
-          { name: "Author's warnings", value: `${db.countWarnings(guild.id, row.author_id)}/${cfg.warn_limit}`, inline: true },
-          { name: 'Author banned', value: banText(db.getBan(guild.id, row.author_id)), inline: true },
+          { name: "Author's warnings", value: `${db.countWarnings(guild.id, row.author_key)}/${cfg.warn_limit}`, inline: true },
+          { name: 'Author banned', value: banText(db.getBan(guild.id, row.author_key)), inline: true },
           { name: 'Reports', value: `${db.countReports(row.id)}${cfg.report_limit > 0 ? `/${cfg.report_limit}` : ''}`, inline: true },
         );
       if (row.channel_id && row.message_id) {
