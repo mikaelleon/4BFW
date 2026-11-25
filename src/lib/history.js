@@ -36,7 +36,7 @@ export function historyEmbed(guild, row) {
   return new EmbedBuilder()
     .setColor(COLOR)
     .setTitle(`History for the author of submission ${row.id}`)
-    .setDescription(`Sender ID: ${row.author_id ? `||${row.author_id}||` : '*(purged)*'}\n${banText}\nActive warnings: **${active}/${cfg.warn_limit}**${expiry}`)
+    .setDescription(`${banText}\nActive warnings: **${active}/${cfg.warn_limit}**${expiry}`)
     .addFields(
       {
         name: `Submissions (${posts.length}: ${statusCount('posted')} posted, ${statusCount('hidden')} hidden, ${statusCount('deleted')} deleted)`,

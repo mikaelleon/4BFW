@@ -278,6 +278,25 @@ if (schemaVersion < 12) {
   schemaVersion = 12;
 }
 
+// v13: anti-abuse gates. 0 = off, except dup_hours which starts at 24 (identical reposts within a day are blocked).
+if (schemaVersion < 13) {
+  db.exec(`
+    ALTER TABLE guilds ADD COLUMN min_join_days    INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN min_account_days INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN daily_cap        INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN dup_hours        INTEGER NOT NULL DEFAULT 24;
+    CREATE INDEX IF NOT EXISTS idx_confessions_guild_created ON confessions (guild_id, created_at);
+    PRAGMA user_version = 13;
+  `);
+  schemaVersion = 13;
+}
+
+// v14: the server owner's 6-digit PIN (scrypt hash, "salt:hash"). Needed to look up a sender ID.
+if (schemaVersion < 14) {
+  db.exec('ALTER TABLE guilds ADD COLUMN owner_pin TEXT; PRAGMA user_version = 14;');
+  schemaVersion = 14;
+}
+
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
 db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 {
@@ -322,7 +341,8 @@ const GUILD_FIELDS = new Set([
   'channel_id', 'log_channel_id', 'role_id', 'mod_role_id', 'sticky_id', 'cooldown', 'warn_limit', 'welcome_dm',
   'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days', 'highlight_channel_id', 'highlight_period',
   'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days', 'approval_mode', 'filter_action',
-  'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold',
+  'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold', 'min_join_days',
+  'min_account_days', 'daily_cap', 'dup_hours', 'owner_pin',
 ]);
 
 export function getGuild(guildId) {
@@ -475,6 +495,31 @@ export function lastConfessionAt(guildId, userId) {
     .prepare('SELECT MAX(created_at) AS t FROM confessions WHERE guild_id = ? AND author_key = ?')
     .get(guildId, keyOf(guildId, userId));
   return row?.t ?? 0;
+}
+
+/** Creation times (oldest first) of this person's posts since `since`; rejected posts do not count. For the daily cap. */
+export function postTimesSince(guildId, userId, since) {
+  return db
+    .prepare("SELECT created_at FROM confessions WHERE guild_id = ? AND author_key = ? AND created_at >= ? AND status != 'rejected' ORDER BY created_at ASC")
+    .all(guildId, keyOf(guildId, userId), since)
+    .map((r) => r.created_at);
+}
+
+/** Text of the newest posts since `since` (any author, any status), for the repost blocker. Erased texts are skipped. */
+export function recentContents(guildId, since, limit = 300) {
+  return db
+    .prepare("SELECT content FROM confessions WHERE guild_id = ? AND created_at >= ? AND content != '' ORDER BY id DESC LIMIT ?")
+    .all(guildId, since, limit);
+}
+
+export function countPending(guildId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'pending'").get(guildId).n;
+}
+
+/** False when the ID hash secret differs from the one the stored keys were made with. */
+export function secretMatches() {
+  const stored = db.prepare("SELECT value FROM meta WHERE key = 'idkey_fp'").get()?.value;
+  return !stored || stored === secretFingerprint();
 }
 
 /* ---------- warnings & bans ---------- */

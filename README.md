@@ -24,13 +24,13 @@ Optional `.env` values: `BOT_PREFIX` (DM prefix) and `TIMEZONE` (IANA name for f
 | Button | "Write a Submission" message is kept at the bottom of the channel (reposted after each post). Opens a pop-up. |
 | DM | `fw <text>` (prefix set by `BOT_PREFIX`, default `fw`) or `/fw`. If you share several servers with the bot, it asks which. Attach one image (PNG/JPG/GIF/WEBP, up to 8 MB) to the DM to show it inside the post; text is optional with an image. Images work **only** in this DM method. |
 
-Posts are titled `Anonymous #001`, get a random color each (so neighbours are easy to tell apart) and a fixed width. Replying (Reply button or `#012` in the text) DMs the original author an embed with a link to the reply, never revealing who replied. Default cooldown is 30s (`/setup options cooldown`).
+Posts are titled `Anonymous #001`, get a color each: a random shade of the topic's color, or a random gray (near-black to near-white) when untagged, so neighbours are easy to tell apart and a fixed width. Replying (Reply button or `#012` in the text) DMs the original author an embed with a link to the reply, never revealing who replied. Default cooldown is 30s (`/setup options cooldown`).
 
 ## Admin commands (need Manage Server; work in a server or in the bot's DMs)
 
 In DMs, pass the `server` option (autocompletes) when you manage more than one server, and use `channel_id` / `role_id` instead of the pickers.
 
-- `/setup channel | modlog | role | modrole | options | reset_count | view | refresh`
+- `/setup channel | modlog | role | modrole | options | reset_count | doctor | view | refresh`
 - `/setup reset_count confirm:true [start_at]` restarts the public numbering (e.g. after moving channels). Old confessions keep their IDs.
 - `/announce [role] [everyone]` DMs the guide (throttled, result DMed to you). Role defaults to `/setup role`; with no role you must pass `everyone: true`.
 - `/setup options welcome_dm:true` DMs the guide to each new member.
@@ -44,7 +44,9 @@ In DMs, pass the `server` option (autocompletes) when you manage more than one s
 | Unique | no, restarts after `/setup reset_count` | yes, never reused |
 | Used for | display | all `/mod` commands |
 
-Admins find the ID in the mod log (every new confession is logged with both), via right-click on the message -> Apps -> **Submission ID**, or `/mod info`. Set a log channel with `/setup modlog`.
+**Sender IDs are never shown** in the mod log or `/mod history`. Only the server owner can look one up: `/sender id:<Submission ID>` asks for the owner's 6-digit PIN (60 seconds, 3 wrong tries lock it for 10 minutes) and answers with a private, dismissable message. The PIN is generated at the first `/setup channel` and DMed to the owner; change it with `/ownerpin`. Only a hash is stored, so a lost PIN cannot be recovered (clear `owner_pin` in the `guilds` table to start over).
+
+Admins find the ID in the mod log (it is the embed title; every new confession is logged with its number), via right-click on the message -> Apps -> **Submission ID**, or `/mod info`. Set a log channel with `/setup modlog`.
 - `/guide`: anyone can re-read the guide.
 
 ## Notes
@@ -62,6 +64,8 @@ Admins find the ID in the mod log (every new confession is logged with both), vi
 - **DM shortcuts:** `fw #memes <message>`, `fw cw: label | <message>`, `fw poll 24h: Question? | A | B`, `fw notify off`, `fw preview on`. The same exist as `/fw` options.
 - **Content warning:** hides the text behind a spoiler under a visible warning line; a picture goes up as a blurred attachment.
 - **Reply notifications:** `/fw notify:off` (or `fw notify off`) stops the "someone replied" DMs. **Preview:** `/fw preview:on` shows the post and asks before it goes up.
+- **Anti-abuse gates** (`/setup options`): `min_join_days` (time in the server), `min_account_days` (Discord account age), `daily_cap` (posts per person per rolling 24 h) and `dup_hours` (blocks a post that repeats, or nearly repeats, anyone's text from the last N hours; default 24, 0 = off; texts under 12 characters may repeat). The first three are off by default. People are told when they can post again, never why a repost matched.
+- **`/setup doctor`** checks the submissions channel, mod log, featured/highlight/topic channels and their permissions, deleted roles, settings that contradict each other (approval without a mod log, a public mod log), pending posts and the ID hash secret, and lists problems with the fix.
 - Mass DMs can get a bot flagged by Discord. `/announce` is slow on purpose; use it sparingly.
 - Mentions in confessions never ping (`allowedMentions` is empty).
 

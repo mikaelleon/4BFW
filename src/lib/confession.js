@@ -14,10 +14,11 @@ import {
 } from 'discord.js';
 import * as db from '../db.js';
 import { dmUser, modLog, notice } from './moderation.js';
-import { COLOR, anonRef, anonTitle, footerLine, prefix, randomSubmissionColor } from './format.js';
+import { COLOR, anonRef, anonTitle, footerLine, prefix, randomSubmissionColor, topicShade } from './format.js';
 import { PAD_NAME, padPng } from './pad.js';
 import { imageHelp, uploadLimit } from './image.js';
 import { checkFilters } from './filter.js';
+import { DUPLICATE_MESSAGE, checkDailyCap, checkEligibility, isDuplicate } from './gates.js';
 import { removeFeatured } from './featured.js';
 import { MAX_CW_LEN, postFiles, renderBody } from './render.js';
 import { TAGS, getTag, tagText } from './tags.js';
@@ -33,6 +34,15 @@ export const REACT_PREFIX = 'confess:react'; // "confess:react:up|down"
 export const VOTE_PREFIX = 'confess:vote'; // "confess:vote:<option index>"
 export const MAX_POLL_OPTIONS = 5;
 export const YES_NO = ['Yes', 'No'];
+// 5-point Likert scale. Fits exactly in one row of buttons (Discord allows 5), which is why 7-point scales are not offered.
+export const LIKERT = ['Strongly disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly agree'];
+export const POLL_KINDS = [
+  { key: 'yesno', label: 'Yes / No', description: 'A simple yes-or-no question' },
+  { key: 'choice', label: 'Multiple choice', description: '2 to 5 options you type next' },
+  { key: 'likert', label: 'Likert scale', description: 'Strongly disagree to strongly agree' },
+];
+export const OPTIONS_MODAL_PREFIX = 'confess:options'; // modal "confess:options:<token>"
+export const OPTIONS_BUTTON_PREFIX = 'confess:addoptions'; // button "confess:addoptions:<token>"
 const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
 /** A poll whose options are exactly Yes / No gets ✅ ❌ buttons; anything else gets numbered buttons. */
 export const isYesNo = (options) => options.length === 2 && options[0].label.toLowerCase() === 'yes' && options[1].label.toLowerCase() === 'no';
@@ -247,17 +257,39 @@ export function confessModal(reply = null) {
       .setTextInputComponent(new TextInputBuilder().setCustomId('cw').setStyle(TextInputStyle.Short).setMaxLength(MAX_CW_LEN).setRequired(false)),
   );
   if (!reply) {
-    // Filling this in turns the submission into a poll: the text above is the question.
+    // Picking a type turns the submission into a poll: the text above is the question. (A modal holds at most 5 inputs, so
+    // "Multiple choice" asks for its options in a second pop-up, see optionsModal.)
     modal.addLabelComponents(
       new LabelBuilder()
-        .setLabel('Poll options (optional)')
-        .setDescription(`Type yes/no for a yes-or-no question, or list 2 to ${MAX_POLL_OPTIONS} options, one per line. Empty = normal post.`)
-        .setTextInputComponent(
-          new TextInputBuilder().setCustomId('poll').setStyle(TextInputStyle.Paragraph).setMaxLength(300).setRequired(false),
+        .setLabel('Poll (optional)')
+        .setDescription('Turn your submission into a poll. The text above is the question.')
+        .setStringSelectMenuComponent(
+          new StringSelectMenuBuilder()
+            .setCustomId('pollkind')
+            .setPlaceholder('No poll')
+            .setRequired(false)
+            .setMinValues(0)
+            .setMaxValues(1)
+            .addOptions(POLL_KINDS.map((k) => ({ label: k.label, description: k.description, value: k.key }))),
         ),
     );
   }
   return modal;
+}
+
+/** Second pop-up for a multiple-choice poll: the options, one per line. `token` ties it to the saved first step. */
+export function optionsModal(token) {
+  return new ModalBuilder()
+    .setCustomId(`${OPTIONS_MODAL_PREFIX}:${token}`)
+    .setTitle('Poll options')
+    .addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Options, one per line')
+        .setDescription(`2 to ${MAX_POLL_OPTIONS} options.`)
+        .setTextInputComponent(
+          new TextInputBuilder().setCustomId('options').setStyle(TextInputStyle.Paragraph).setMaxLength(300).setRequired(true),
+        ),
+    );
 }
 
 /* ---------- sticky "button" message at the bottom of the channel ---------- */
@@ -303,14 +335,9 @@ export const approvalRow = (id) =>
     new ButtonBuilder().setCustomId(`${APPROVAL_PREFIX}:no:${id}`).setLabel('Reject').setStyle(ButtonStyle.Danger),
   );
 
-/** Extra mod-log fields describing a post: topic, content warning, poll options. */
+/** Extra mod-log fields describing a post: content warning. (Topic and poll marker are added by modLog; poll options are not shown.) */
 function logFields(row) {
-  const options = row.is_poll ? db.getPollOptions(row.id) : [];
-  return [
-    ...(row.tag ? [{ name: 'Topic', value: tagText(row.tag), inline: true }] : []),
-    ...(row.cw ? [{ name: 'Content warning', value: row.cw, inline: true }] : []),
-    ...(options.length ? [{ name: 'Poll options', value: options.map((o) => `• ${o.label}`).join('\n').slice(0, 1000) }] : []),
-  ];
+  return row.cw ? [{ name: 'Content warning', value: row.cw, inline: true }] : [];
 }
 
 /**
@@ -330,7 +357,9 @@ async function publish(guild, row) {
 
   const image = row.has_image ? db.getConfessionImage(row.id) : null;
   const { body, targets } = linkReferences(guild.id, row.content, row.reply_to);
-  const color = getTag(row.tag)?.color ?? randomSubmissionColor(guild.id); // tagged posts are colour-coded by topic
+  // Tagged posts get a shade of their topic's color, untagged ones a random gray.
+  const topic = getTag(row.tag);
+  const color = topic ? topicShade(topic.color, `${guild.id}:${topic.key}`) : randomSubmissionColor(guild.id);
   db.setConfessionRendered(row.id, body, color);
   const full = db.getConfession(guild.id, row.id);
   let msg;
@@ -397,8 +426,15 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     if (!member) return fail('You are not a member of that server.');
     if (db.getBan(guild.id, userId)) return fail('You are banned from posting in this server.');
 
+    const tooNew = checkEligibility(member, cfg);
+    if (tooNew) return fail(tooNew);
+
     const waitMs = db.lastConfessionAt(guild.id, userId) + cfg.cooldown * 1000 - Date.now();
     if (waitMs > 0) return fail(`Slow down. Try again in ${Math.ceil(waitMs / 1000)}s.`);
+
+    const capped = checkDailyCap(guild.id, userId, cfg);
+    if (capped) return fail(capped);
+    if (isDuplicate(guild.id, content, cfg.dup_hours)) return fail(DUPLICATE_MESSAGE);
 
     // Auto-filter: reject right away, or hold the post for a moderator (the author is only told it awaits review).
     let holdReason = null;

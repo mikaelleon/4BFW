@@ -11,6 +11,8 @@ import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
 import { COLOR, anonRef } from '../lib/format.js';
 import { postComponents, refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
+import { runDoctor } from '../lib/doctor.js';
+import { ensureOwnerPin, hasPin } from '../lib/owner-pin.js';
 import { highlightTimers } from '../lib/highlights.js';
 import { tagChoices, tagText } from '../lib/tags.js';
 
@@ -77,7 +79,7 @@ export default {
       serverOpt(
         s
           .setName('options')
-          .setDescription('Cooldown, warnings, reports, approval queue, polls, self-delete, retention, welcome DM')
+          .setDescription('Cooldown, join/account age, daily cap, repost blocker, warnings, reports, approval, polls, retention')
           .addIntegerOption((o) => o.setName('cooldown').setDescription('Seconds between submissions per user').setMinValue(0).setMaxValue(3600))
           .addIntegerOption((o) => o.setName('warn_limit').setDescription('Warnings before an automatic submission ban').setMinValue(1).setMaxValue(20))
           .addIntegerOption((o) =>
@@ -101,6 +103,18 @@ export default {
           )
           .addIntegerOption((o) =>
             o.setName('poll_hours').setDescription('Polls close by themselves after this many hours (0 = stay open until closed)').setMinValue(0).setMaxValue(168),
+          )
+          .addIntegerOption((o) =>
+            o.setName('min_join_days').setDescription('Members must be in the server this many days before posting (0 = off)').setMinValue(0).setMaxValue(365),
+          )
+          .addIntegerOption((o) =>
+            o.setName('min_account_days').setDescription('Discord accounts must be this many days old to post (0 = off)').setMinValue(0).setMaxValue(3650),
+          )
+          .addIntegerOption((o) =>
+            o.setName('daily_cap').setDescription('Most posts one person can make per 24 hours (0 = no cap)').setMinValue(0).setMaxValue(100),
+          )
+          .addIntegerOption((o) =>
+            o.setName('dup_hours').setDescription('Block a post that repeats one from the last N hours (0 = off, default 24)').setMinValue(0).setMaxValue(168),
           )
           .addBooleanOption((o) => o.setName('welcome_dm').setDescription('DM the guide to new members when they join')),
       ),
@@ -163,6 +177,7 @@ export default {
           .addIntegerOption((o) => o.setName('count').setDescription('How many of the newest posts (default 50)').setMinValue(1).setMaxValue(200)),
       ),
     )
+    .addSubcommand((s) => serverOpt(s.setName('doctor').setDescription('Check channels, permissions and settings for problems')))
     .addSubcommand((s) => serverOpt(s.setName('view').setDescription('Show current settings')))
     .addSubcommand((s) => serverOpt(s.setName('refresh').setDescription('Repost the button message at the bottom of the channel'))),
 
@@ -188,9 +203,17 @@ export default {
       if (cfg?.channel_id && cfg.channel_id !== channel.id) await removeSticky(guild);
       db.updateGuild(guild.id, { channel_id: channel.id });
       await refreshSticky(guild);
+      // First setup: make the owner's PIN and DM it to them (sender IDs are only viewable with it, see /sender).
+      const pin = await ensureOwnerPin(guild);
+      const pinNote =
+        pin === 'sent'
+          ? '\nThe server owner was sent their private PIN by DM. Sender IDs stay hidden; only the owner can look one up with `/sender`.'
+          : pin === 'dm_failed'
+            ? '\nI could not DM the server owner a PIN (closed DMs?). They can set one with `/ownerpin` after opening their DMs.'
+            : '';
       return interaction.editReply(
         `Submissions channel set to <#${channel.id}> and the button is posted.\n` +
-          'Tip: deny **Send Messages** for @everyone in that channel so only the bot posts there.',
+          `Tip: deny **Send Messages** for @everyone in that channel so only the bot posts there.${pinNote}`,
       );
     }
 
@@ -263,6 +286,10 @@ export default {
       const pollHours = interaction.options.getInteger('poll_hours');
       if (approval !== null) patch.approval_mode = approval ? 1 : 0;
       if (pollHours !== null) patch.poll_hours = pollHours;
+      for (const key of ['min_join_days', 'min_account_days', 'daily_cap', 'dup_hours']) {
+        const n = interaction.options.getInteger(key);
+        if (n !== null) patch[key] = n;
+      }
       if (cooldown !== null) patch.cooldown = cooldown;
       if (warnLimit !== null) patch.warn_limit = warnLimit;
       if (welcome !== null) patch.welcome_dm = welcome ? 1 : 0;
@@ -404,6 +431,10 @@ export default {
       return interaction.editReply('Button message reposted.');
     }
 
+    if (sub === 'doctor') {
+      return interaction.editReply({ embeds: [await runDoctor(guild)], allowedMentions: { parse: [] } });
+    }
+
     // view
     const c = cfg ?? {};
     const routes = db.listTagChannels(guild.id);
@@ -429,6 +460,10 @@ export default {
         { name: 'Online notice role', value: c.online_role_id ? `<@&${c.online_role_id}>` : 'Not set', inline: true },
         { name: 'Moderator role', value: c.mod_role_id ? `<@&${c.mod_role_id}>` : 'Not set', inline: true },
         { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
+        { name: 'Minimum time in server', value: c.min_join_days > 0 ? `${c.min_join_days} days` : 'Off', inline: true },
+        { name: 'Minimum account age', value: c.min_account_days > 0 ? `${c.min_account_days} days` : 'Off', inline: true },
+        { name: 'Daily post cap', value: c.daily_cap > 0 ? `${c.daily_cap} per 24 h` : 'Off', inline: true },
+        { name: 'Repost blocker', value: c.dup_hours > 0 ? `Same text within ${c.dup_hours} h` : 'Off', inline: true },
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
         { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
         { name: 'Approval queue', value: c.approval_mode ? 'On (posts wait for a moderator)' : 'Off (post first, moderate after)', inline: true },
@@ -441,6 +476,7 @@ export default {
         { name: 'Confession of the day / week', value: highlight, inline: true },
         { name: 'Topic channels', value: topicValue },
         { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },
+        { name: 'Owner PIN', value: hasPin(guild.id) ? 'Set' : 'Not set (owner: run /ownerpin)', inline: true },
         { name: 'Next public number', value: anonRef((c.counter ?? 0) + 1), inline: true },
       );
     return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });

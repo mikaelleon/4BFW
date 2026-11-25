@@ -12,7 +12,7 @@ const jump = (guildId, row) => `https://discord.com/channels/${guildId}/${row.ch
 function featuredEmbed(guildId, row, counts, imageName) {
   const tag = getTag(row.tag);
   const embed = new EmbedBuilder()
-    .setColor(tag?.color ?? row.color ?? 0xf0b232)
+    .setColor(row.color ?? tag?.color ?? 0xf0b232)
     .setAuthor({ name: '⭐ Featured submission' })
     .setTitle(anonTitle(row.number))
     .setDescription(`${renderBody(row.rendered ?? row.content, row.cw)}\n\n👍 **${counts.up}**  ·  [Jump to post](${jump(guildId, row)})`.trim())

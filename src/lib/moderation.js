@@ -3,10 +3,9 @@ import * as db from '../db.js';
 import { controlsRow } from './controls-row.js';
 import { COLOR, anonRef, formatDateTime } from './format.js';
 import { PAD_NAME, padPng } from './pad.js';
+import { tagText } from './tags.js';
 
 const MAX_CONTENT = 3000;
-// An empty inline field. Three columns per row keeps "Sender ID" under the ID and the timestamp under the number.
-const BLANK = { name: '​', value: '​', inline: true };
 
 /** "> " quote every line so the original text reads as a quote block. */
 function quote(text) {
@@ -18,8 +17,8 @@ function quote(text) {
 }
 
 /**
- * Post to the admin log channel: the submission's text and jump link, its admin-only ID, public number, sender
- * and the time. Fixed width (see pad.js), shared embed color, no footer.
+ * Post to the admin log channel: the submission's text and jump link, its admin-only ID, topic, public number
+ * and the time. `authorId` is accepted by callers but never displayed. Fixed width (see pad.js), shared embed color, no footer.
  * `controls: true` adds the Warn / Delete / Ban buttons (used on new-submission entries).
  */
 export async function modLog(guild, { title, id, subId, number, actor, reason, url, content, authorId, hasImage, controls = false, components = null, fields = [], ping = null }) {
@@ -31,7 +30,13 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
   // The stored image (if any) is attached to every entry about this submission, so mods see what was posted.
   const image = hasImage && id ? db.getConfessionImage(id) : null;
 
+  // The sender ID is never shown here: the server owner looks it up with /sender (see owner-pin.js).
+  const row = id ? db.getConfession(guild.id, id) : null;
+  const subNo = subId ?? id; // per-server number; `id` is the internal key. Entries not about one post (a ban appeal) have none.
+  const lead = [tagText(row?.tag), row?.is_poll ? '📊 Poll' : null].filter(Boolean).join(' · '); // topic sits right under the title
+
   const parts = [];
+  if (lead) parts.push(lead);
   if (content) parts.push(quote(content));
   if (hasImage && !image) parts.push('*Included an image (no longer stored)*');
   if (url) parts.push(`[Jump to message](${url})`);
@@ -39,16 +44,16 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .addFields(
-      // Entries that are not about one post (a ban appeal) have no ID and number.
-      (subId ?? id) != null ? { name: 'Submission ID', value: `\`${subId ?? id}\``, inline: true } : BLANK, // per-server number; `id` is the internal key
-      (subId ?? id) != null ? { name: 'Public number', value: number ? anonRef(number) : 'Assigned on approval', inline: true } : BLANK,
-      actor ? { name: 'Moderator', value: `<@${actor.id}>`, inline: true } : BLANK,
-      authorId ? { name: 'Sender ID', value: `||${authorId}||`, inline: true } : BLANK,
+      ...(subNo != null ? [{ name: 'Public number', value: number ? anonRef(number) : 'Assigned on approval', inline: true }] : []),
+      ...(actor ? [{ name: 'Moderator', value: `<@${actor.id}>`, inline: true }] : []),
       { name: 'Timestamp', value: formatDateTime(), inline: true },
-      BLANK,
     )
     .setImage(`attachment://${image ? image.name : PAD_NAME}`);
-  if (title) embed.setTitle(title);
+  // Title = the Submission ID; what happened ("Submission approved") moves to the line above it.
+  if (subNo != null) {
+    embed.setTitle(`Submission ID ${subNo}`);
+    if (title) embed.setAuthor({ name: title });
+  } else if (title) embed.setTitle(title);
   if (parts.length) embed.setDescription(parts.join('\n\n'));
   if (fields.length) embed.addFields(fields);
   if (reason) embed.addFields({ name: 'Reason', value: reason.slice(0, 1000) });

@@ -3,7 +3,7 @@
 // Polls end at their end time or when the author (or a moderator) presses Close poll; results go in a reply.
 import { EmbedBuilder, MessageFlags } from 'discord.js';
 import * as db from '../db.js';
-import { MAX_POLL_OPTIONS, YES_NO, buildPost, fetchPostMessage, postComponents } from './confession.js';
+import { LIKERT, MAX_POLL_OPTIONS, YES_NO, buildPost, fetchPostMessage, postComponents } from './confession.js';
 import { isModerator } from './context.js';
 import { maybeFeature } from './featured.js';
 import { COLOR, anonTitle } from './format.js';
@@ -19,6 +19,7 @@ export function parsePollOptions(text, separator = /\r?\n/) {
   const raw = (text ?? '').trim();
   if (!raw) return { options: null };
   if (/^(yes\s*(\/|,|or)\s*no|yes\s*no|y\s*\/\s*n)$/i.test(raw)) return { options: [...YES_NO] };
+  if (/^likert(\s+scale)?$/i.test(raw)) return { options: [...LIKERT] };
   const options = raw
     .split(separator)
     .map((o) => o.trim())
@@ -77,7 +78,7 @@ function resultsEmbed(row) {
   });
   const question = row.content ? `${row.cw ? '*(content warning)*' : row.content}\n\n` : '';
   return new EmbedBuilder()
-    .setColor(getTag(row.tag)?.color ?? row.color ?? COLOR)
+    .setColor(row.color ?? getTag(row.tag)?.color ?? COLOR)
     .setTitle(`📊 Poll results · ${anonTitle(row.number)}`)
     .setDescription(`${question}${lines.join('\n\n')}\n\n**${total}** vote${total === 1 ? '' : 's'}`);
 }

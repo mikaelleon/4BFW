@@ -32,7 +32,7 @@ async function postHighlight(guild, cfg, period, row) {
   const tag = getTag(row.tag);
   const url = `https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id}`;
   const embed = new EmbedBuilder()
-    .setColor(tag?.color ?? row.color ?? 0xf0b232)
+    .setColor(row.color ?? tag?.color ?? 0xf0b232)
     .setAuthor({ name: `🏆 Confession of the ${period.label}` })
     .setTitle(anonTitle(row.number))
     .setDescription(`${renderBody(row.rendered ?? row.content ?? '', row.cw)}\n\n👍 **${row.ups}**  👎 **${row.downs}**  ·  [Jump to post](${url})`.trim())

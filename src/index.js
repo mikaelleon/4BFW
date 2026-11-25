@@ -4,6 +4,8 @@ import http from 'node:http';
 import './restore.js'; // must stay before db.js: restores the DB from the backup channel if the disk was wiped
 import {
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   Events,
   GatewayIntentBits,
@@ -25,9 +27,15 @@ import {
   VOTE_PREFIX,
   APPROVAL_PREFIX,
   CLOSE_POLL_ID,
+  LIKERT,
+  OPTIONS_BUTTON_PREFIX,
+  OPTIONS_MODAL_PREFIX,
+  YES_NO,
   confessModal,
   ensureSticky,
+  optionsModal,
 } from './lib/confession.js';
+import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } from './lib/owner-pin.js';
 import { prefix } from './lib/format.js';
 import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
@@ -329,17 +337,62 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (prepared.error) return interaction.editReply(prepared.error);
         image = prepared.image;
       }
-      // Topic is optional; the poll box exists only on new posts (not replies) and turns the post into a poll.
+      // Topic is optional; the poll type exists only on new posts (not replies) and turns the post into a poll.
       const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
-      const poll = replyTo ? { options: null } : parsePollOptions(interaction.fields.getTextInputValue('poll'));
-      if (poll.error) return interaction.editReply(poll.error);
-      const out = await submitOrPreview(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image, {
-        tag,
-        cw: interaction.fields.getTextInputValue('cw'),
-        pollOptions: poll.options,
-      });
+      const text = interaction.fields.getTextInputValue('text');
+      const cw = interaction.fields.getTextInputValue('cw');
+      let kind = null;
+      if (!replyTo) {
+        try {
+          kind = interaction.fields.getStringSelectValues('pollkind')?.[0] ?? null;
+        } catch {
+          /* a pop-up opened before this update has no poll type */
+        }
+      }
+      if (kind === 'choice') {
+        // Multiple choice: the options come from a second pop-up. Keep the first step (text, image) for ten minutes.
+        const token = randomUUID().slice(0, 8);
+        pending.set(token, { userId: interaction.user.id, guildId: guild.id, text, image, tag, cw, expires: Date.now() + 10 * 60_000 });
+        return interaction.editReply({
+          content: 'Multiple choice poll: add your options to finish. Nothing is posted until you do.',
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`${OPTIONS_BUTTON_PREFIX}:${token}`).setLabel('Add options').setStyle(ButtonStyle.Primary),
+            ),
+          ],
+        });
+      }
+      const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
+      const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
       return interaction.editReply(out.preview ?? resultText(out.result, guild));
     }
+
+    // Multiple choice, step two: the "Add options" button opens the options pop-up, whose answer finishes the post.
+    if (interaction.isButton() && interaction.customId.startsWith(`${OPTIONS_BUTTON_PREFIX}:`)) {
+      const entry = pending.get(interaction.customId.split(':')[2]);
+      if (!entry || entry.userId !== interaction.user.id) {
+        return interaction.update({ content: 'That request expired. Write your submission again.', components: [] });
+      }
+      return interaction.showModal(optionsModal(interaction.customId.split(':')[2]));
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${OPTIONS_MODAL_PREFIX}:`)) {
+      const token = interaction.customId.split(':')[2];
+      const entry = pending.get(token);
+      if (!entry || entry.userId !== interaction.user.id) {
+        return interaction.reply({ content: 'That request expired. Write your submission again.', flags: EPHEMERAL });
+      }
+      await interaction.deferReply({ flags: EPHEMERAL });
+      const poll = parsePollOptions(interaction.fields.getTextInputValue('options'));
+      if (poll.error) return interaction.editReply(`${poll.error} Press **Add options** again to retry.`);
+      pending.delete(token);
+      const guild = client.guilds.cache.get(entry.guildId) ?? (await client.guilds.fetch(entry.guildId));
+      const out = await submitOrPreview(guild, entry.userId, entry.text, null, entry.image, { tag: entry.tag, cw: entry.cw, pollOptions: poll.options });
+      return interaction.editReply(out.preview ?? resultText(out.result, guild));
+    }
+
+    // Owner PIN: the pop-up asking for it (/sender, /ownerpin) and the Dismiss button under a sender lookup.
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${PIN_MODAL_PREFIX}:`)) return handlePinModal(interaction);
+    if (interaction.isButton() && interaction.customId === PIN_DISMISS_ID) return handlePinDismiss(interaction);
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('confess:pick:')) {
       const token = interaction.customId.split(':')[2];
