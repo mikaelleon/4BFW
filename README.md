@@ -1,82 +1,121 @@
 # Confessions Bot
 
-Anonymous confessions (freedom wall) bot for Discord. Node 22.13+ (uses built-in `node:sqlite`, no native deps).
+Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in `node:sqlite`, no native deps).
 
 ## Setup
 
 1. Discord Developer Portal -> New Application -> Bot. Copy the **token**.
-2. Bot tab -> enable **Server Members Intent** (needed for `/announce` and membership checks).
-3. Invite the bot (replace `YOUR_CLIENT_ID`):
-   `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot%20applications.commands&permissions=19456`
-4. `copy .env.example .env`, fill `DISCORD_TOKEN` and `CLIENT_ID`.
+2. Bot tab -> enable **Server Members Intent** (needed for `/announce`, welcome DMs, and membership checks).
+3. Invite the bot (replace `YOUR_CLIENT_ID`). The permission set covers viewing, sending, embeds, files, and message history:
+   `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot%20applications.commands&permissions=117760`
+4. `copy .env.example .env`, then fill `DISCORD_TOKEN` and `CLIENT_ID`.
 5. `npm install`, then `npm run deploy` (registers slash commands), then `npm start`.
    - Leave `DEV_GUILD_ID` empty for global commands (required for DM use, up to ~1h to propagate).
    - Set it to your server ID to test instantly (guild commands do not work in DMs).
 6. In your server: `/setup channel #confessions`. Deny **Send Messages** for @everyone in that channel so only the bot posts.
 
-Optional `.env` values: `BOT_PREFIX` (DM prefix) and `TIMEZONE` (IANA name for footer date/time, default `Asia/Manila`).
+| `.env` | Required | What it does |
+|---|---|---|
+| `DISCORD_TOKEN`, `CLIENT_ID` | yes | Login and command registration |
+| `DEV_GUILD_ID` | no | Guild-only command deploy for testing |
+| `BOT_PREFIX` | no | DM prefix (default `fw`) |
+| `TIMEZONE` | no | Footer dates (default `Asia/Manila`) |
+| `ID_HASH_SECRET` | no | Pins the hash key for bans and warnings. Set it once; never change it |
+| `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Encrypted DB backups to a private channel, every 15 minutes when the data changed. Both required |
+| `PORT` | no | HTTP keep-alive (default `3000`) |
 
-## Sending a confession
+## Sending a submission
 
 | Way | How |
 |---|---|
-| Slash command | `/fw message:...` in any server channel or in the bot's DMs. Reply is ephemeral: nothing public is left. |
-| Button | "Write a Submission" message is kept at the bottom of the channel (reposted after each post). Opens a pop-up. |
-| DM | `fw <text>` (prefix set by `BOT_PREFIX`, default `fw`) or `/fw`. If you share several servers with the bot, it asks which. Attach one image (PNG/JPG/GIF/WEBP, up to 8 MB) to the DM to show it inside the post; text is optional with an image. Images work **only** in this DM method. |
+| Slash command | `/fw` in any server channel or in the bot's DMs. The reply is ephemeral. |
+| Button | **Write a Submission** stays at the bottom of the channel (reposted after each post) and opens a pop-up. |
+| DM | `fw <text>` (prefix from `BOT_PREFIX`). If you share several servers with the bot, it asks which. DMs sent while the bot was offline are picked up on startup (up to 24 hours). |
 
-Posts are titled `Anonymous #001`, get a color each: a random shade of the topic's color, or a random gray (near-black to near-white) when untagged, so neighbours are easy to tell apart and a fixed width. Replying (Reply button or `#012` in the text) DMs the original author an embed with a link to the reply, never revealing who replied. Default cooldown is 30s (`/setup options cooldown`).
+Optional on `/fw` and in the pop-up: a **topic**, one **image** (PNG, JPG, GIF, or WEBP), a **content warning**, and a **poll**. Text can be empty when an image is attached. The image is re-uploaded by the bot, so the size cap is the server's Discord upload limit (10 MB, or 50 / 100 MB if the server is boosted). The original filename is dropped.
 
-## Admin commands (need Manage Server; work in a server or in the bot's DMs)
+DM extras, in this order: `fw #memes <message>`, `fw cw: spoilers | <message>`, `fw poll 24h: Question? | Option A | Option B` (the `24h` is optional; no options means yes/no). The same exist as `/fw` options. `fw notify off` stops reply DMs. `fw preview on` shows the post and asks before it goes up.
 
-In DMs, pass the `server` option (autocompletes) when you manage more than one server, and use `channel_id` / `role_id` instead of the pickers.
+Posts are titled `Anonymous #001`. A tagged post gets a random shade of that topic's color; an untagged post gets a random gray. A wide transparent image keeps every post the same width. Replying (the Reply button, or `#012` in the text, up to five) DMs the original author an embed with a link to the reply, never revealing who replied. `/fw notify:off` turns those DMs off. Default cooldown is 30s (`/setup options cooldown`).
 
-- `/setup channel | modlog | role | modrole | options | reset_count | doctor | view | refresh`
-- `/setup reset_count confirm:true [start_at]` restarts the public numbering (e.g. after moving channels). Old confessions keep their IDs.
-- `/announce [role] [everyone]` DMs the guide (throttled, result DMed to you). Role defaults to `/setup role`; with no role you must pass `everyone: true`.
-- `/setup options welcome_dm:true` DMs the guide to each new member.
-- `/mod delete | warn | ban | unban | info <id>`: act on the **Submission ID**. The mod log shows the sender's user ID (spoilered), so anyone who can read the log channel can identify authors: keep it staff-only. The bot applies the warning/ban to the stored author. Warn limit (default 3) auto-bans.
+Under each post: **Reply**, **Report**, and 👍 👎 ❤️ (one reaction per person; tap again to take it back). Polls use a second row of buttons. A poll is yes/no (`/fw poll:yes/no`, or `fw poll: Question?`) or 2–5 options. It closes after `poll_hours` (per post, or the server default; `0` means until someone closes it) or when the author or a moderator presses **Close poll**. A results card is posted as a reply.
+
+**Report** asks for an optional reason. Reports are anonymous: the mod log shows a count and the reason, never who reported. Each person can report a post once. At `/setup options report_limit` (default 3, `0` = never) the post is hidden until a moderator restores or deletes it.
+
+Topics (also `#key` in DMs): Confessions, Crush / Love, Rants & Vents, Shoutouts, Campus Life, Academics, Questions, Lost & Found, Events, Org & Department, Memes, Random, Suggestions, Mental Health, Open Letters. `/setup tagchannel` sends one topic to its own channel. The button stays in the main channel.
 
 ## Confession number vs Submission ID
 
 | | Public number | Submission ID |
 |---|---|---|
-| Shown to | everyone ("Anonymous Confession #12") | admins only |
-| Unique | no, restarts after `/setup reset_count` | yes, never reused |
-| Used for | display | all `/mod` commands |
+| Shown to | everyone (`Anonymous #012`) | moderators (mod-log title, `/mod`) |
+| Unique | no, restarts after `/setup reset_count` | yes, per server, never reused |
+| Used for | display and `#012` links | every `/mod` command and `/sender` |
 
 **Sender IDs are never shown** in the mod log or `/mod history`. Only the server owner can look one up: `/sender id:<Submission ID>` asks for the owner's 6-digit PIN (60 seconds, 3 wrong tries lock it for 10 minutes) and answers with a private, dismissable message. The PIN is generated at the first `/setup channel` and DMed to the owner; change it with `/ownerpin`. Only a hash is stored, so a lost PIN cannot be recovered (clear `owner_pin` in the `guilds` table to start over).
 
-Admins find the ID in the mod log (it is the embed title; every new confession is logged with its number), via right-click on the message -> Apps -> **Submission ID**, or `/mod info`. Set a log channel with `/setup modlog`.
-- `/guide`: anyone can re-read the guide.
+Moderators find the Submission ID in the mod-log title, via right-click on the message -> Apps -> **Submission ID**, or `/mod info`. Set a log channel with `/setup modlog`.
+
+`/guide` lets anyone re-read the guide.
+
+## Admin commands
+
+Need **Manage Server** unless noted. They work in a server or in the bot's DMs. In DMs, pass `server` (autocompletes) when you manage more than one server, and use `channel_id` / `role_id` instead of the pickers.
+
+`/setup`:
+
+- `channel` — submissions channel and the button message
+- `modlog` — moderation log (omit the channel to clear)
+- `role` — role that `/announce` DMs the guide to
+- `onlinerole` — role that gets a DM when the bot comes online (at most once every 30 minutes)
+- `modrole` — role that can use mod-log buttons, `/mod`, and **Submission ID** without Manage Server
+- `options` — cooldown, warn limit and expiry, report limit, self-delete window, retention, approval queue, default poll length, join age, account age, daily cap, repost window, welcome DM
+- `reset_count confirm:true [start_at]` — restart public numbering. Old posts keep their Submission IDs
+- `tagchannel` — route one topic to its own channel
+- `highlights` — post the most-liked submission of the day, the week, or both (rolling 24h / 7 days from when it was turned on; nothing is posted if nobody liked anything)
+- `featured` — copy a post into another channel once it reaches a 👍 threshold (default 5). The copy's counts follow the original, and the copy is removed if the original is deleted or hidden
+- `refreshposts [count]` — put the current buttons on the newest posts (default 50)
+- `refresh` — repost the button message
+- `view` — current settings
+- `doctor` — channels, permissions, deleted roles, settings that contradict each other, pending posts, and the ID hash secret
+
+`/filter` (Manage Server): `add` a whole word or phrase (any case) or a regex, `remove`, `list`, `test`, and `settings`. On a hit the post is **rejected**, or **held** in the mod log for approval. Settings can also block Discord invites and/or every link. Authors are told only that something is not allowed, never which rule.
+
+`/announce [role] [everyone]` DMs the guide (throttled; the result is DMed to you). The role defaults to `/setup role`. With no role you must pass `everyone: true`. `/setup options welcome_dm:true` DMs the guide to each new member.
+
+`/mod` (Manage Server or the moderator role), all by Submission ID:
+
+- `delete`, `warn` (optional `delete`), `ban` (optional `duration` like `30m`, `12h`, `7d`, `2w`; default also deletes the post), `unban` (clears warnings by default)
+- `info`, `history` (that author's posts, warnings, and notes), `note`, `restore` (put back a post that reports auto-hid, and dismiss its reports)
+
+The warn limit (default 3) auto-bans. Warnings older than `warn_expiry_days` (`0` = never) stop counting. Timed bans lift themselves; the user and the mod log are told.
+
+## Mod log
+
+Every new submission is logged with its text, image, jump link, topic, poll options, public number, and timestamp. The embed title is the Submission ID. There is no sender ID on the entry.
+
+Buttons under an entry: **Warn**, **Delete**, and **Ban** (**Unban** once the author is banned). Warn, Delete, and Ban ask for a preset reason plus optional details; Ban also asks for a duration. **Restore** appears while a post is auto-hidden. The same actions exist as `/mod`.
+
+`/setup modrole` grants those buttons, `/mod`, and **Submission ID**. `/setup`, `/announce`, `/filter`, `/sender`, and `/ownerpin` stay restricted (Manage Server, or owner-only for the PIN commands). If `/mod` is hidden from the role, allow it under Server Settings > Integrations. Keep the mod log staff-only: it contains the full text and any image.
+
+`/setup options approval:true` holds new posts in the mod log with **Approve** / **Reject** until a moderator acts. The public number is assigned on approval. Default is off (post first, moderate after), which matches the guide. Filter holds use the same queue.
+
+## Notices and appeals
+
+Warning, ban, and removal DMs share one layout: what happened, the reason, a ~100-character excerpt (public number only), where the user stands, and a **Read the rules** button. Warnings are yellow at 1/3, orange at 2/3, and red at the limit, with a progress bar and an ID like `W-0042`. If warning expiry is on, the DM says so.
+
+- Contest a warning with `/appeal W-0042 [message]`. The mod log (pinging the moderator role) gets **Overturn warning** / **Uphold**. The user is DMed the result.
+- Contest a ban by DMing `fw appeal <why>`. The mod log gets **Lift ban** / **Deny**. A denied appeal can be sent again after a week. An open appeal blocks a second one.
+- A removal by itself is not a warning. The DM tells the user to message a moderator; there is no appeal command for a deletion.
+
+Authors can right-click their own post > Apps > **Delete my submission** within `self_delete_minutes` (default 10, `0` = off). Anyone else is told it is not theirs.
 
 ## Notes
 
-- The bot stores the author ID privately per confession (needed to DM the author about warnings and replies). The guide tells users this. Anyone with access to `data/confessions.db` can see it, so protect that file.
-- **Hashed IDs:** warnings, bans, notes, votes and reports are stored under a keyed hash of `server:user`, not the raw Discord ID. Set `ID_HASH_SECRET` in `.env` (any long random string) and **never change it**: a different secret makes every stored ban and warning stop matching its user (the bot logs a warning at startup if the secret changed). Without it the secret is derived from `DISCORD_TOKEN`.
-- **Data retention:** `/setup options retention_days:N` erases the sender ID, text and image of posts older than N days (checked hourly). The post stays in the channel; IDs, bans and warnings keep working. Mod-log entries already posted in Discord are not touched.
-- **Self-delete:** authors can right-click their own post > Apps > **Delete my submission** within `/setup options self_delete_minutes` (default 10, 0 = off).
-- **Ban appeals:** a banned user DMs the bot `fw appeal <why>`; the mod log gets the appeal with **Lift ban** / **Deny** buttons.
-- `/setup refreshposts [count]` adds the current buttons (Report, reactions, poll) to older posts.
-- **Auto-filter** (`/filter`): `add` a word/phrase (whole word, any case) or a regex, `remove`, `list`, `test`, and `settings` to choose what happens on a hit (**reject** the post, or **hold** it in the mod log for a moderator) and to block Discord invites and/or all links. Authors are told only that something is not allowed, never which rule.
-- **Approval queue** (`/setup options approval:true`): new posts wait in the mod log with **Approve** / **Reject** buttons and get their public number when approved. Default is off: posts go up first and are moderated afterwards, which is what the guide's rules describe. Filter holds use the same queue.
-- **Polls** are yes/no (`/fw poll:yes/no`, or `fw poll: Question?` in DMs; ✅ ❌ buttons) or 2-5 options (numbered 1️⃣-5️⃣ buttons, options listed in the post). They close at their end time (`/fw poll_hours`, or the server default `/setup options poll_hours`, 0 = until closed) or when the author or a moderator presses **Close poll**. A results card is posted as a reply.
-- **Featured channel** (`/setup featured channel threshold`): a post with that many 👍 is copied there once; the copy's counters follow, and it is removed if the original is deleted or hidden.
-- **DM shortcuts:** `fw #memes <message>`, `fw cw: label | <message>`, `fw poll 24h: Question? | A | B`, `fw notify off`, `fw preview on`. The same exist as `/fw` options.
-- **Content warning:** hides the text behind a spoiler under a visible warning line; a picture goes up as a blurred attachment.
-- **Reply notifications:** `/fw notify:off` (or `fw notify off`) stops the "someone replied" DMs. **Preview:** `/fw preview:on` shows the post and asks before it goes up.
-- **Anti-abuse gates** (`/setup options`): `min_join_days` (time in the server), `min_account_days` (Discord account age), `daily_cap` (posts per person per rolling 24 h) and `dup_hours` (blocks a post that repeats, or nearly repeats, anyone's text from the last N hours; default 24, 0 = off; texts under 12 characters may repeat). The first three are off by default. People are told when they can post again, never why a repost matched.
-- **`/setup doctor`** checks the submissions channel, mod log, featured/highlight/topic channels and their permissions, deleted roles, settings that contradict each other (approval without a mod log, a public mod log), pending posts and the ID hash secret, and lists problems with the fix.
-- Mass DMs can get a bot flagged by Discord. `/announce` is slow on purpose; use it sparingly.
-- Mentions in confessions never ping (`allowedMentions` is empty).
-
-## Mod log buttons and the moderator role
-
-Every new submission is logged in the mod-log channel (`/setup modlog`) with its text, jump link, Submission ID, public number, spoilered sender ID and timestamp. Under each entry are **Warn**, **Delete** and **Ban** (**Unban** once the author is banned) buttons. Warn, Delete and Ban ask for an optional reason first; the same actions are available as `/mod` commands.
-
-`/setup modrole @role` lets that role use the buttons, `/mod` and the right-click **Submission ID** command without Manage Server. Setup commands (`/setup`, `/announce`) stay Manage Server only. If `/mod` is hidden from the role, allow it for them under Server Settings > Integrations. Keep the mod-log channel staff-only: it shows sender IDs.
-
-## Moderation notices and appeals
-
-Warning, ban and removal DMs share one layout: what happened, reason, a ~100-character excerpt of the post (public number only, never the admin Submission ID), where the user stands, and what they can do next, with a **Read the rules** button. Warnings are yellow at 1/3, orange at 2/3 and red at the limit, with a progress bar and a warning ID like `W-0042`. If warning expiry is on (`/setup options warn_expiry_days`), the DM says so.
-
-Users contest a warning with `/appeal W-0042 [message]`. The appeal appears in the mod log (pinging the moderator role) with **Overturn warning** / **Uphold** buttons; the user is DMed the result. Bans and removals tell the user to message a moderator (no command for those yet).
+- The bot stores the author ID on each confession so it can DM the author about replies, warnings, and bans. The guide tells users this. Anyone with access to `data/confessions.db` can see it, so protect that file. Backups of that file are encrypted, but they still contain the same data.
+- **Hashed IDs:** warnings, bans, notes, votes, and reports are stored under a keyed hash of `server:user`, not the raw Discord ID. Set `ID_HASH_SECRET` and never change it. A different secret makes every stored ban and warning stop matching its user (the bot logs a warning at startup if the secret changed). Without it, the secret is derived from `DISCORD_TOKEN`.
+- **Data retention:** `/setup options retention_days:N` erases the sender ID, text, and image of posts older than N days (checked hourly). The Discord message stays. Submission IDs, bans, and warnings keep working. Mod-log messages already posted in Discord are not edited.
+- **Anti-abuse** (`/setup options`): `min_join_days`, `min_account_days`, `daily_cap` (posts per person per rolling 24 h), and `dup_hours` (blocks a post that repeats, or nearly repeats, anyone's text from the last N hours; default 24, `0` = off; texts under 12 characters may repeat). The first three are off by default. People are told when they can post again, never why a repost matched.
+- A content warning hides the text behind a spoiler under a visible warning line. A picture goes up as a blurred attachment.
+- Mass DMs can get a bot flagged by Discord. `/announce` and the online notice are slow on purpose; use them sparingly.
+- Mentions in submissions never ping (`allowedMentions` is empty).
