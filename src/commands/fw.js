@@ -3,6 +3,8 @@ import { resolveGuild } from '../lib/context.js';
 import { submitConfession, MAX_LEN } from '../lib/confession.js';
 import { anonTitle } from '../lib/format.js';
 import { prepareImage, uploadLimit } from '../lib/image.js';
+import { parsePollOptions } from '../lib/engagement.js';
+import { tagChoices } from '../lib/tags.js';
 
 export default {
   admin: false,
@@ -13,6 +15,10 @@ export default {
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .addStringOption((o) =>
       o.setName('message').setDescription('What you want to say').setRequired(true).setMaxLength(MAX_LEN),
+    )
+    .addStringOption((o) => o.setName('topic').setDescription('Topic of your post (optional)').addChoices(...tagChoices()))
+    .addStringOption((o) =>
+      o.setName('poll').setDescription('Make it a poll: 2-5 options separated by | (your message is the question)').setMaxLength(250),
     )
     .addAttachmentOption((o) => o.setName('image').setDescription('Optional image (PNG, JPG, GIF or WEBP)'))
     .addStringOption((o) =>
@@ -25,6 +31,9 @@ export default {
     const { guild, error } = await resolveGuild(interaction);
     if (error) return interaction.editReply(error);
 
+    const poll = parsePollOptions(interaction.options.getString('poll'), '|');
+    if (poll.error) return interaction.editReply(poll.error);
+
     let image = null;
     const attachment = interaction.options.getAttachment('image');
     if (attachment) {
@@ -33,7 +42,10 @@ export default {
       image = prepared.image;
     }
 
-    const res = await submitConfession(guild, interaction.user.id, interaction.options.getString('message', true), null, image);
+    const res = await submitConfession(guild, interaction.user.id, interaction.options.getString('message', true), null, image, {
+      tag: interaction.options.getString('topic'),
+      pollOptions: poll.options,
+    });
     return interaction.editReply(res.ok ? `Posted as **${anonTitle(res.number)}**.\n${res.url}` : res.error);
   },
 };

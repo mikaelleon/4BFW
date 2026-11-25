@@ -18,7 +18,9 @@ import {
   GUIDE_BUTTON_ID,
   OPEN_BUTTON_ID,
   REPLY_BUTTON_ID,
+  REACT_PREFIX,
   REPORT_BUTTON_ID,
+  VOTE_PREFIX,
   confessModal,
   ensureSticky,
   submitConfession,
@@ -27,6 +29,7 @@ import { anonTitle, prefix } from './lib/format.js';
 import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
+import { handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
 import { GUIDE_PREFIX, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
@@ -223,6 +226,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
     }
 
+    // 👍 👎 ❤️ and poll-option buttons under a submission.
+    if (interaction.isButton() && interaction.customId.startsWith(`${REACT_PREFIX}:`)) return handleReactionButton(interaction);
+    if (interaction.isButton() && interaction.customId.startsWith(`${VOTE_PREFIX}:`)) return handleVoteButton(interaction);
+
     // "Report" button under a submission, and its reason pop-up.
     if (interaction.isButton() && interaction.customId === REPORT_BUTTON_ID) return handleReportButton(interaction);
     if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REPORT_MODAL_PREFIX}:`)) return handleReportModal(interaction);
@@ -238,7 +245,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (prepared.error) return interaction.editReply(prepared.error);
         image = prepared.image;
       }
-      const res = await submitConfession(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image);
+      // Topic is optional; the poll box exists only on new posts (not replies) and turns the post into a poll.
+      const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
+      const poll = replyTo ? { options: null } : parsePollOptions(interaction.fields.getTextInputValue('poll'));
+      if (poll.error) return interaction.editReply(poll.error);
+      const res = await submitConfession(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image, {
+        tag,
+        pollOptions: poll.options,
+      });
       return interaction.editReply(res.ok ? `Posted as **${anonTitle(res.number)}**.` : res.error);
     }
 

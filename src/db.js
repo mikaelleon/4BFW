@@ -113,6 +113,45 @@ if (schemaVersion < 6) {
     CREATE INDEX IF NOT EXISTS idx_notes_user ON mod_notes (guild_id, user_id);
     PRAGMA user_version = 6;
   `);
+  schemaVersion = 6;
+}
+// v7: topic tags (+ per-tag channels), button reactions, polls, and "confession of the day/week" settings.
+if (schemaVersion < 7) {
+  db.exec(`
+    ALTER TABLE confessions ADD COLUMN tag TEXT;
+    ALTER TABLE confessions ADD COLUMN is_poll INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN highlight_channel_id TEXT;
+    ALTER TABLE guilds ADD COLUMN highlight_period TEXT NOT NULL DEFAULT 'off';
+    ALTER TABLE guilds ADD COLUMN highlight_daily_at INTEGER;
+    ALTER TABLE guilds ADD COLUMN highlight_weekly_at INTEGER;
+    CREATE TABLE IF NOT EXISTS tag_channels (
+      guild_id   TEXT NOT NULL,
+      tag        TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      PRIMARY KEY (guild_id, tag)
+    );
+    -- one reaction per person per post: kind is 'up', 'down' or 'heart'
+    CREATE TABLE IF NOT EXISTS reactions (
+      confession_id INTEGER NOT NULL,
+      user_id       TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      PRIMARY KEY (confession_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS poll_options (
+      confession_id INTEGER NOT NULL,
+      idx           INTEGER NOT NULL,
+      label         TEXT NOT NULL,
+      PRIMARY KEY (confession_id, idx)
+    );
+    -- one vote per person per poll
+    CREATE TABLE IF NOT EXISTS poll_votes (
+      confession_id INTEGER NOT NULL,
+      user_id       TEXT NOT NULL,
+      idx           INTEGER NOT NULL,
+      PRIMARY KEY (confession_id, user_id)
+    );
+    PRAGMA user_version = 7;
+  `);
 }
 
 // Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
@@ -138,7 +177,8 @@ export function knownDmUsers() {
 
 const GUILD_FIELDS = new Set([
   'channel_id', 'log_channel_id', 'role_id', 'mod_role_id', 'sticky_id', 'cooldown', 'warn_limit', 'welcome_dm',
-  'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days',
+  'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days', 'highlight_channel_id', 'highlight_period',
+  'highlight_daily_at', 'highlight_weekly_at',
 ]);
 
 export function getGuild(guildId) {
@@ -160,14 +200,18 @@ export function configuredGuilds() {
 
 /* ---------- confessions ---------- */
 
-export function createConfession(guildId, authorId, content, hasImage = false) {
+/** `extras` = { tag, pollOptions } (both optional). Poll options are stored together with the confession. */
+export function createConfession(guildId, authorId, content, hasImage = false, extras = {}) {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
     const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO confessions (guild_id, number, author_id, content, has_image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(guildId, counter, authorId, content, hasImage ? 1 : 0, Date.now());
+      .prepare('INSERT INTO confessions (guild_id, number, author_id, content, has_image, created_at, tag, is_poll) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(guildId, counter, authorId, content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0);
+    extras.pollOptions?.forEach((label, idx) =>
+      db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
+    );
     db.exec('COMMIT');
     return { id: Number(lastInsertRowid), number: counter };
   } catch (err) {
@@ -179,6 +223,7 @@ export function createConfession(guildId, authorId, content, hasImage = false) {
 /** Undo a createConfession whose Discord post failed. Call only while holding the guild lock. */
 export function discardConfession(guildId, id, number) {
   db.prepare('DELETE FROM confession_images WHERE confession_id = ?').run(id);
+  db.prepare('DELETE FROM poll_options WHERE confession_id = ?').run(id);
   db.prepare('DELETE FROM confessions WHERE guild_id = ? AND id = ?').run(guildId, id);
   db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
 }
@@ -339,4 +384,97 @@ export function listNotes(guildId, userId) {
 
 export function listConfessionsByAuthor(guildId, userId) {
   return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND author_id = ? ORDER BY id DESC').all(guildId, userId);
+}
+
+/* ---------- topic channels ---------- */
+
+export function getTagChannel(guildId, tag) {
+  return db.prepare('SELECT channel_id FROM tag_channels WHERE guild_id = ? AND tag = ?').get(guildId, tag)?.channel_id ?? null;
+}
+
+export function setTagChannel(guildId, tag, channelId) {
+  if (!channelId) db.prepare('DELETE FROM tag_channels WHERE guild_id = ? AND tag = ?').run(guildId, tag);
+  else
+    db.prepare(
+      'INSERT INTO tag_channels (guild_id, tag, channel_id) VALUES (?, ?, ?) ON CONFLICT(guild_id, tag) DO UPDATE SET channel_id = excluded.channel_id',
+    ).run(guildId, tag, channelId);
+}
+
+export function listTagChannels(guildId) {
+  return db.prepare('SELECT tag, channel_id FROM tag_channels WHERE guild_id = ?').all(guildId);
+}
+
+/* ---------- reactions & polls (votes are never shown with a name, the user id only enforces one vote each) ---------- */
+
+/** Click a reaction: same one again removes it, a different one switches. Returns the user's new reaction or null. */
+export function toggleReaction(confessionId, userId, kind) {
+  const current = db.prepare('SELECT kind FROM reactions WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.kind;
+  if (current === kind) {
+    db.prepare('DELETE FROM reactions WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
+    return null;
+  }
+  db.prepare(
+    'INSERT INTO reactions (confession_id, user_id, kind) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET kind = excluded.kind',
+  ).run(confessionId, userId, kind);
+  return kind;
+}
+
+export function reactionCounts(confessionId) {
+  const counts = { up: 0, down: 0, heart: 0 };
+  for (const r of db.prepare('SELECT kind, COUNT(*) AS n FROM reactions WHERE confession_id = ? GROUP BY kind').all(confessionId)) {
+    counts[r.kind] = r.n;
+  }
+  return counts;
+}
+
+export function getPollOptions(confessionId) {
+  return db.prepare('SELECT idx, label FROM poll_options WHERE confession_id = ? ORDER BY idx').all(confessionId);
+}
+
+/** Vote for option `idx`; the same option again withdraws the vote. Returns the new choice or null. */
+export function togglePollVote(confessionId, userId, idx) {
+  const current = db.prepare('SELECT idx FROM poll_votes WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.idx;
+  if (current === idx) {
+    db.prepare('DELETE FROM poll_votes WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
+    return null;
+  }
+  db.prepare(
+    'INSERT INTO poll_votes (confession_id, user_id, idx) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET idx = excluded.idx',
+  ).run(confessionId, userId, idx);
+  return idx;
+}
+
+/** Map of option idx -> votes. */
+export function pollCounts(confessionId) {
+  const counts = new Map();
+  for (const r of db.prepare('SELECT idx, COUNT(*) AS n FROM poll_votes WHERE confession_id = ? GROUP BY idx').all(confessionId)) {
+    counts.set(r.idx, r.n);
+  }
+  return counts;
+}
+
+/* ---------- highlights ---------- */
+
+/** Most-liked post (👍 + ❤️, fewest 👎 breaks ties, then the older one) created at or after `since`. Null when nobody liked anything. */
+export function topLikedSince(guildId, since) {
+  return (
+    db
+      .prepare(
+        `SELECT c.*,
+                COALESCE(SUM(r.kind = 'up'), 0)    AS ups,
+                COALESCE(SUM(r.kind = 'heart'), 0) AS hearts,
+                COALESCE(SUM(r.kind = 'down'), 0)  AS downs
+           FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
+          WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL
+          GROUP BY c.id
+         HAVING ups + hearts > 0
+          ORDER BY ups + hearts DESC, downs ASC, c.id ASC
+          LIMIT 1`,
+      )
+      .get(guildId, since) ?? null
+  );
+}
+
+export function guildsWithHighlights() {
+  return db.prepare("SELECT * FROM guilds WHERE highlight_channel_id IS NOT NULL AND highlight_period != 'off'").all();
 }

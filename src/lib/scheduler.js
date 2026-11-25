@@ -1,5 +1,6 @@
-// Background jobs: lift timed bans when their time is up.
+// Background jobs, once a minute: lift timed bans whose time is up, post the confession of the day / week.
 import * as db from '../db.js';
+import { runHighlights } from './highlights.js';
 import { dmUser, notice, systemLog } from './moderation.js';
 
 const INTERVAL_MS = 60_000;
@@ -14,7 +15,10 @@ async function sweepBans(client) {
 }
 
 export function startScheduler(client) {
-  const tick = () => sweepBans(client).catch((err) => console.error('Ban sweep failed:', err));
+  const tick = () => {
+    sweepBans(client).catch((err) => console.error('Ban sweep failed:', err));
+    runHighlights(client).catch((err) => console.error('Highlights failed:', err));
+  };
   tick();
   setInterval(tick, INTERVAL_MS).unref();
 }

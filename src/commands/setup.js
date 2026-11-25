@@ -11,6 +11,8 @@ import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
 import { COLOR, anonRef } from '../lib/format.js';
 import { refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
+import { highlightTimers } from '../lib/highlights.js';
+import { tagChoices, tagText } from '../lib/tags.js';
 
 const serverOpt = (s) =>
   s.addStringOption((o) => o.setName('server').setDescription('Which server (only needed in DMs)').setAutocomplete(true));
@@ -92,6 +94,36 @@ export default {
           .setDescription('Restart public submission numbering (e.g. when moving channels)')
           .addBooleanOption((o) => o.setName('confirm').setDescription('Set to true to confirm the reset').setRequired(true))
           .addIntegerOption((o) => o.setName('start_at').setDescription('Number for the next submission (default 1)').setMinValue(1)),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        channelOpts(
+          s
+            .setName('tagchannel')
+            .setDescription('Send posts of one topic to their own channel (omit channel to use the main channel again)')
+            .addStringOption((o) => o.setName('topic').setDescription('Topic').setRequired(true).addChoices(...tagChoices())),
+        ),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        channelOpts(
+          s
+            .setName('highlights')
+            .setDescription('Auto-post the most-liked submission of the day / week')
+            .addStringOption((o) =>
+              o
+                .setName('period')
+                .setDescription('How often (default: keep the current setting)')
+                .addChoices(
+                  { name: 'Every day', value: 'daily' },
+                  { name: 'Every week', value: 'weekly' },
+                  { name: 'Both', value: 'both' },
+                  { name: 'Off', value: 'off' },
+                ),
+            ),
+        ),
       ),
     )
     .addSubcommand((s) => serverOpt(s.setName('view').setDescription('Show current settings')))
@@ -205,6 +237,51 @@ export default {
       );
     }
 
+    if (sub === 'tagchannel') {
+      const topic = interaction.options.getString('topic', true);
+      const { id, channel } = await pickChannel(interaction, guild);
+      if (!id) {
+        db.setTagChannel(guild.id, topic, null);
+        return interaction.editReply(`${tagText(topic)} posts go to the main channel again.`);
+      }
+      if (!channel || !textTypes.includes(channel.type)) return interaction.editReply('That is not a text channel in this server.');
+      const me = guild.members.me ?? (await guild.members.fetchMe());
+      const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+      if (!channel.permissionsFor(me)?.has(needed)) {
+        return interaction.editReply('I need **View Channel**, **Send Messages** and **Embed Links** in that channel.');
+      }
+      db.setTagChannel(guild.id, topic, channel.id);
+      return interaction.editReply(
+        `${tagText(topic)} posts now go to <#${channel.id}>. The "Write a Submission" button stays in <#${cfg?.channel_id ?? 'the main channel'}>.`,
+      );
+    }
+
+    if (sub === 'highlights') {
+      const { id, channel } = await pickChannel(interaction, guild);
+      const period = interaction.options.getString('period') ?? (cfg?.highlight_period && cfg.highlight_period !== 'off' ? cfg.highlight_period : 'daily');
+      if (period === 'off') {
+        db.updateGuild(guild.id, { highlight_period: 'off' });
+        return interaction.editReply('Confession of the day / week is off.');
+      }
+      let target = cfg?.highlight_channel_id ?? null;
+      if (id) {
+        if (!channel || !textTypes.includes(channel.type)) return interaction.editReply('That is not a text channel in this server.');
+        target = channel.id;
+      }
+      if (!target) return interaction.editReply('Give a `channel` (or `channel_id`) to post the highlights in.');
+      const me = guild.members.me ?? (await guild.members.fetchMe());
+      const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+      const dest = await guild.channels.fetch(target).catch(() => null);
+      if (!dest?.permissionsFor(me)?.has(needed)) {
+        return interaction.editReply('I need **View Channel**, **Send Messages** and **Embed Links** in that channel.');
+      }
+      db.updateGuild(guild.id, { ...highlightTimers(cfg, period), highlight_channel_id: target, highlight_period: period });
+      const when = { daily: 'every 24 hours', weekly: 'every 7 days', both: 'every 24 hours and every 7 days' }[period];
+      return interaction.editReply(
+        `The most-liked submission (👍 + ❤️) will be posted in <#${target}> ${when}, starting from now. Nothing is posted if nobody liked anything.`,
+      );
+    }
+
     if (sub === 'refresh') {
       if (!cfg?.channel_id) return interaction.editReply('Run `/setup channel` first.');
       await refreshSticky(guild);
@@ -213,6 +290,14 @@ export default {
 
     // view
     const c = cfg ?? {};
+    const routes = db.listTagChannels(guild.id);
+    const topicValue = routes.length
+      ? routes.map((r) => `${tagText(r.tag) ?? r.tag} → <#${r.channel_id}>`).join('\n').slice(0, 1000)
+      : 'None (everything goes to the main channel)';
+    const highlight =
+      c.highlight_channel_id && c.highlight_period && c.highlight_period !== 'off'
+        ? `${{ daily: 'Daily', weekly: 'Weekly', both: 'Daily + weekly' }[c.highlight_period]} in <#${c.highlight_channel_id}>`
+        : 'Off';
     const embed = new EmbedBuilder()
       .setColor(COLOR)
       .setTitle(`Settings for ${guild.name}`)
@@ -226,6 +311,8 @@ export default {
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
         { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
         { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },
+        { name: 'Confession of the day / week', value: highlight, inline: true },
+        { name: 'Topic channels', value: topicValue },
         { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },
         { name: 'Next public number', value: anonRef((c.counter ?? 0) + 1), inline: true },
       );

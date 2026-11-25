@@ -8,6 +8,7 @@ import {
   LabelBuilder,
   ModalBuilder,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
@@ -16,6 +17,7 @@ import { dmUser, modLog, notice } from './moderation.js';
 import { COLOR, anonRef, anonTitle, footerLine, prefix, randomSubmissionColor } from './format.js';
 import { PAD_NAME, padPng } from './pad.js';
 import { imageHelp, uploadLimit } from './image.js';
+import { TAGS, getTag, tagText } from './tags.js';
 
 export const MAX_LEN = 2000;
 export const OPEN_BUTTON_ID = 'confess:open';
@@ -24,6 +26,9 @@ export const MODAL_ID = 'confess:modal';
 export { prefix };
 export const REPLY_BUTTON_ID = 'confess:reply';
 export const REPORT_BUTTON_ID = 'confess:report';
+export const REACT_PREFIX = 'confess:react'; // "confess:react:up|down|heart"
+export const VOTE_PREFIX = 'confess:vote'; // "confess:vote:<option index>"
+export const MAX_POLL_OPTIONS = 5;
 const jumpUrl = (guildId, row) => `https://discord.com/channels/${guildId}/${row.channel_id}/${row.message_id}`;
 
 /* One queue per guild so numbering and the sticky message stay in order. */
@@ -43,22 +48,57 @@ const fail = (error) => ({ ok: false, error });
 /* ---------- embeds / components ---------- */
 
 /** Submission post: random color, and a transparent wide image (see pad.js) so every post has the same width. */
-export function confessionEmbed(number, content, color, imageName = PAD_NAME) {
+export function confessionEmbed(number, content, color, imageName = PAD_NAME, tag = null) {
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(anonTitle(number))
     .setImage(`attachment://${imageName}`) // the user's image, or the transparent pad when there is none
     .setFooter({ text: footerLine() });
   if (content) embed.setDescription(content);
+  const text = tagText(tag);
+  if (text) embed.setAuthor({ name: text }); // the topic, shown above the title
   return embed;
 }
 
-function replyRow() {
-  return new ActionRowBuilder().addComponents(
-    // No confession ID in the custom id: the target is read from the message the button sits on.
-    new ButtonBuilder().setCustomId(REPLY_BUTTON_ID).setLabel('Reply').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(REPORT_BUTTON_ID).setLabel('Report').setStyle(ButtonStyle.Secondary),
-  );
+const reactionButton = (kind, emoji, count) => {
+  const button = new ButtonBuilder().setCustomId(`${REACT_PREFIX}:${kind}`).setEmoji(emoji).setStyle(ButtonStyle.Secondary);
+  return count > 0 ? button.setLabel(String(count)) : button;
+};
+
+/**
+ * Buttons under a post: Reply, Report and the 👍 👎 ❤️ counters, plus one button per option for a poll.
+ * No confession ID in any custom id: the target is read from the message the button sits on.
+ * Rebuilt from the database whenever a count changes.
+ */
+export function postComponents(row) {
+  const counts = db.reactionCounts(row.id);
+  const rows = [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(REPLY_BUTTON_ID).setLabel('Reply').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(REPORT_BUTTON_ID).setLabel('Report').setStyle(ButtonStyle.Secondary),
+      reactionButton('up', '👍', counts.up),
+      reactionButton('down', '👎', counts.down),
+      reactionButton('heart', '❤️', counts.heart),
+    ),
+  ];
+  if (row.is_poll) {
+    const votes = db.pollCounts(row.id);
+    const options = db.getPollOptions(row.id);
+    const total = options.reduce((sum, o) => sum + (votes.get(o.idx) ?? 0), 0);
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        options.map((o) => {
+          const n = votes.get(o.idx) ?? 0;
+          const share = total ? ` (${Math.round((n / total) * 100)}%)` : '';
+          return new ButtonBuilder()
+            .setCustomId(`${VOTE_PREFIX}:${o.idx}`)
+            .setLabel(`${o.label} · ${n}${share}`.slice(0, 80))
+            .setStyle(ButtonStyle.Primary);
+        }),
+      ),
+    );
+  }
+  return rows;
 }
 
 /**
@@ -135,10 +175,21 @@ function stickyPayload() {
 
 /** `reply` = { messageId, number } when answering a specific confession. */
 export function confessModal(reply = null) {
-  return new ModalBuilder()
+  const modal = new ModalBuilder()
     .setCustomId(reply ? `${MODAL_ID}:${reply.messageId}` : MODAL_ID)
     .setTitle(reply ? `Reply to ${anonTitle(reply.number)}` : 'Write a submission')
     .addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Topic (optional)')
+        .setStringSelectMenuComponent(
+          new StringSelectMenuBuilder()
+            .setCustomId('tag')
+            .setPlaceholder('Pick a topic')
+            .setRequired(false)
+            .setMinValues(0)
+            .setMaxValues(1)
+            .addOptions(TAGS.map((t) => ({ label: t.label, value: t.key, emoji: t.emoji }))),
+        ),
       new LabelBuilder().setLabel('Your submission').setTextInputComponent(
         new TextInputBuilder()
           .setCustomId('text')
@@ -152,6 +203,18 @@ export function confessModal(reply = null) {
         .setDescription('PNG, JPG, GIF or WEBP')
         .setFileUploadComponent(new FileUploadBuilder().setCustomId('image').setMinValues(0).setMaxValues(1).setRequired(false)),
     );
+  if (!reply) {
+    // Filling this in turns the submission into a poll: the text above is the question.
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Poll options (optional)')
+        .setDescription(`One per line, 2 to ${MAX_POLL_OPTIONS} options. Leave empty for a normal post.`)
+        .setTextInputComponent(
+          new TextInputBuilder().setCustomId('poll').setStyle(TextInputStyle.Paragraph).setMaxLength(300).setRequired(false),
+        ),
+    );
+  }
+  return modal;
 }
 
 /* ---------- sticky "button" message at the bottom of the channel ---------- */
@@ -190,8 +253,11 @@ export async function removeSticky(guild) {
 
 /* ---------- submitting ---------- */
 
-/** `image` = { buffer, name } for DM submissions with a picture (re-uploaded into the channel). */
-export function submitConfession(guild, userId, rawContent, replyToMessageId = null, image = null) {
+/**
+ * `image` = { buffer, name } (re-uploaded into the channel).
+ * `extras` = { tag, pollOptions }: a topic key, and/or the option labels that make this post a poll.
+ */
+export function submitConfession(guild, userId, rawContent, replyToMessageId = null, image = null, extras = {}) {
   return withLock(guild.id, async () => {
     const cfg = db.getGuild(guild.id);
     if (!cfg?.channel_id) return fail('Submissions are not set up in this server yet.');
@@ -199,6 +265,13 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     const content = (rawContent ?? '').trim();
     if (!content && !image) return fail('Write something first.');
     if (content.length > MAX_LEN) return fail(`Too long. Max ${MAX_LEN} characters.`);
+
+    const tag = getTag(extras.tag)?.key ?? null;
+    const pollOptions = extras.pollOptions?.length ? extras.pollOptions : null;
+    if (pollOptions && (pollOptions.length < 2 || pollOptions.length > MAX_POLL_OPTIONS)) {
+      return fail(`A poll needs 2 to ${MAX_POLL_OPTIONS} options.`);
+    }
+    if (pollOptions && !content) return fail('A poll needs a question. Write it in the message.');
 
     const limit = uploadLimit(guild);
     if (image && image.buffer.length > limit) return fail(`That image is too big for this server. ${imageHelp(limit)}`);
@@ -210,23 +283,25 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     const waitMs = db.lastConfessionAt(guild.id, userId) + cfg.cooldown * 1000 - Date.now();
     if (waitMs > 0) return fail(`Slow down. Try again in ${Math.ceil(waitMs / 1000)}s.`);
 
-    const channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
     const me = guild.members.me ?? (await guild.members.fetchMe());
     const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
-    if (!channel || !channel.permissionsFor(me)?.has(needed)) {
-      return fail('I cannot post in the submissions channel right now. Tell an admin.');
-    }
+    const usable = (c) => c && c.permissionsFor(me)?.has(needed);
+    // A topic can have its own channel (/setup tagchannel). If that one is gone or off-limits, use the main channel.
+    const topicId = tag ? db.getTagChannel(guild.id, tag) : null;
+    let channel = topicId ? await guild.channels.fetch(topicId).catch(() => null) : null;
+    if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
+    if (!usable(channel)) return fail('I cannot post in the submissions channel right now. Tell an admin.');
 
-    const { id, number } = db.createConfession(guild.id, userId, content, Boolean(image));
+    const { id, number } = db.createConfession(guild.id, userId, content, Boolean(image), { tag, pollOptions });
     if (image) db.setConfessionImage(id, image.name, image.buffer);
     let msg;
     const { body, targets } = linkReferences(guild.id, content, replyToMessageId);
-    const color = randomSubmissionColor(guild.id);
+    const color = getTag(tag)?.color ?? randomSubmissionColor(guild.id); // tagged posts are colour-coded by topic
     try {
       msg = await channel.send({
-        embeds: [confessionEmbed(number, body, color, image ? image.name : PAD_NAME)],
+        embeds: [confessionEmbed(number, body, color, image ? image.name : PAD_NAME, tag)],
         files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
-        components: [replyRow()],
+        components: postComponents({ id, is_poll: pollOptions ? 1 : 0 }),
         allowedMentions: { parse: [] },
       });
     } catch (err) {
@@ -246,6 +321,10 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
       authorId: userId,
       hasImage: Boolean(image),
       controls: true,
+      fields: [
+        ...(tag ? [{ name: 'Topic', value: tagText(tag), inline: true }] : []),
+        ...(pollOptions ? [{ name: 'Poll options', value: pollOptions.map((o) => `• ${o}`).join('\n').slice(0, 1000) }] : []),
+      ],
     }).catch(() => {});
     await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
     // Fire and forget: DMs can be slow or closed, and must not delay the reply to the sender.
@@ -293,10 +372,12 @@ export async function restoreConfessionMessage(guild, row) {
   if (!msg) return false;
   const image = row.has_image ? db.getConfessionImage(row.id) : null;
   await msg.edit({
-    embeds: [confessionEmbed(row.number, row.rendered ?? row.content, row.color ?? randomSubmissionColor(guild.id), image ? image.name : PAD_NAME)],
+    embeds: [
+      confessionEmbed(row.number, row.rendered ?? row.content, row.color ?? randomSubmissionColor(guild.id), image ? image.name : PAD_NAME, row.tag),
+    ],
     files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
     attachments: [],
-    components: [replyRow()],
+    components: postComponents(row),
     allowedMentions: { parse: [] },
   });
   db.markConfession(guild.id, row.id, 'posted');
