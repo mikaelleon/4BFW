@@ -86,7 +86,7 @@ async function dmPin(guild, pin, reason) {
       embeds: [
         notice(
           `Your owner PIN for ${guild.name}`,
-          `${reason}\n\n## \`${pin}\`\n\n` +
+          `${reason}\n## \`${pin}\`\n` +
             'You need it to look up a sender ID with `/sender`. Keep it private. ' +
             'Change it any time with `/ownerpin`. Delete this message once you have saved it somewhere safe.',
         ),

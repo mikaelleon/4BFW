@@ -7,6 +7,11 @@ import { BACKUP_PREFIX, BACKUP_SUFFIX, backupEnabled, decryptDb } from './lib/ba
 const DB_PATH = 'data/confessions.db';
 const API = 'https://discord.com/api/v10';
 
+/** True when the DB was just restored from a backup (the backup job must not re-upload that same data). */
+export let restored = false;
+/** True when a restore was needed but failed: uploading the empty DB would bury the good backups. */
+export let restoreFailed = false;
+
 async function restore() {
   if (existsSync(DB_PATH) || !backupEnabled() || !process.env.DISCORD_TOKEN) return;
   const headers = { Authorization: `Bot ${process.env.DISCORD_TOKEN}` };
@@ -24,6 +29,7 @@ async function restore() {
   const db = decryptDb(Buffer.from(await data.arrayBuffer()));
   mkdirSync('data', { recursive: true });
   writeFileSync(DB_PATH, db);
+  restored = true;
   console.log(`Backup restore: restored ${file.filename} (${db.length} bytes).`);
 }
 
@@ -31,5 +37,6 @@ try {
   await restore();
 } catch (err) {
   // Wrong passphrase, missing channel access, etc. Start empty rather than crash-loop, but say so loudly.
-  console.error('Backup restore FAILED, starting with an empty database:', err.message);
+  restoreFailed = true;
+  console.error('Backup restore FAILED, starting with an empty database. Backups are paused so good ones are not buried:', err.message);
 }

@@ -5,6 +5,25 @@ import { isKey, keyOf, secretFingerprint, userKey } from './lib/identity.js';
 mkdirSync('data', { recursive: true });
 const db = new DatabaseSync('data/confessions.db');
 
+// Write hook: lets the backup job know the data changed, so a backup follows within seconds instead of on a timer.
+let writeListener = null;
+export function onWrite(fn) {
+  writeListener = fn;
+}
+const rawPrepare = db.prepare.bind(db);
+db.prepare = (sql) => {
+  const stmt = rawPrepare(sql);
+  if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) {
+    const rawRun = stmt.run.bind(stmt);
+    stmt.run = (...args) => {
+      const result = rawRun(...args);
+      writeListener?.();
+      return result;
+    };
+  }
+  return stmt;
+};
+
 db.exec(`
 PRAGMA journal_mode = WAL;
 

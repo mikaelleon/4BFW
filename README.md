@@ -83,6 +83,8 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 `/announce [role] [everyone]` DMs the guide (throttled; the result is DMed to you). The role defaults to `/setup role`. With no role you must pass `everyone: true`. `/setup options welcome_dm:true` DMs the guide to each new member.
 
+`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup right after). Both need Manage Server, and the result is DMed to you. After adding them, run `npm run deploy` to register the commands.
+
 `/mod` (Manage Server or the moderator role), all by Submission ID:
 
 - `delete`, `warn` (optional `delete`), `ban` (optional `duration` like `30m`, `12h`, `7d`, `2w`; default also deletes the post), `unban` (clears warnings by default)
