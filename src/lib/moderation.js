@@ -22,7 +22,7 @@ function quote(text) {
  * and the time. Fixed width (see pad.js), shared embed color, no footer.
  * `controls: true` adds the Warn / Delete / Ban buttons (used on new-submission entries).
  */
-export async function modLog(guild, { title, id, number, actor, reason, url, content, authorId, hasImage, controls = false, fields = [], ping = null }) {
+export async function modLog(guild, { title, id, subId, number, actor, reason, url, content, authorId, hasImage, controls = false, fields = [], ping = null }) {
   const cfg = db.getGuild(guild.id);
   if (!cfg?.log_channel_id) return;
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
@@ -39,7 +39,7 @@ export async function modLog(guild, { title, id, number, actor, reason, url, con
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .addFields(
-      { name: 'Submission ID', value: `\`${id}\``, inline: true },
+      { name: 'Submission ID', value: `\`${subId ?? id}\``, inline: true }, // per-server number; `id` is the internal key
       { name: 'Public number', value: anonRef(number), inline: true },
       actor ? { name: 'Moderator', value: `<@${actor.id}>`, inline: true } : BLANK,
       authorId ? { name: 'Sender ID', value: `||${authorId}||`, inline: true } : BLANK,

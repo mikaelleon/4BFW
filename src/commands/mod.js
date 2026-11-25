@@ -14,7 +14,7 @@ import { parseDuration, untilTag } from '../lib/duration.js';
 import { historyEmbed } from '../lib/history.js';
 import { COLOR, anonRef } from '../lib/format.js';
 
-// `id` is the admin-only Submission ID (unique forever). The public number can repeat after a counter reset.
+// `id` is the admin-only Submission ID (counts per server, never reused). The public number can repeat after a counter reset.
 const idOpt = (o) =>
   o.setName('id').setDescription('Submission ID (admin-only; see the mod log or right-click the message)').setRequired(true).setMinValue(1);
 const reasonOpt = (o) => o.setName('reason').setDescription('Reason (sent to the author, shown in the mod log)').setMaxLength(500);
@@ -95,7 +95,7 @@ export default {
 
     const sub = interaction.options.getSubcommand();
     const id = interaction.options.getInteger('id', true);
-    const row = db.getConfession(guild.id, id);
+    const row = db.getConfessionBySubId(guild.id, id);
     if (!row) return interaction.editReply(`There is no submission with ID \`${id}\` in this server.`);
 
     const actor = interaction.user;

@@ -1,8 +1,9 @@
 // Interaction handlers for the moderation buttons under each mod-log entry.
-import { ActionRowBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { LabelBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import * as db from '../db.js';
 import { banAuthor, deleteSubmission, restoreSubmission, unbanAuthor, warnAuthor } from './actions.js';
 import { parseDuration } from './duration.js';
+import { PRESET_ID, combineReason, reasonDropdown } from './reasons.js';
 import { isModerator } from './context.js';
 import { controlsRow } from './controls-row.js';
 import { anonRef } from './format.js';
@@ -55,27 +56,24 @@ export async function handleControlButton(interaction) {
   const modal = new ModalBuilder()
     .setCustomId(`${REASON_PREFIX}:${action}:${row.id}`)
     .setTitle(`${TITLES[action]} ${anonRef(row.number)}`)
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('reason')
-          .setLabel('Reason (optional)')
-          .setStyle(TextInputStyle.Paragraph)
-          .setMaxLength(500)
-          .setRequired(false),
+    .addLabelComponents(
+      reasonDropdown(action), // preset reasons at the top
+      new LabelBuilder().setLabel('Details (optional)').setTextInputComponent(
+        new TextInputBuilder().setCustomId('reason').setStyle(TextInputStyle.Paragraph).setMaxLength(400).setRequired(false),
       ),
     );
   if (action === 'ban') {
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('duration')
-          .setLabel('Duration (empty = permanent)')
-          .setPlaceholder('30m, 12h, 7d, 2w')
-          .setStyle(TextInputStyle.Short)
-          .setMaxLength(8)
-          .setRequired(false),
-      ),
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Duration (empty = permanent)')
+        .setTextInputComponent(
+          new TextInputBuilder()
+            .setCustomId('duration')
+            .setPlaceholder('30m, 12h, 7d, 2w')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(8)
+            .setRequired(false),
+        ),
     );
   }
   return interaction.showModal(modal);
@@ -95,7 +93,7 @@ export async function handleReasonModal(interaction) {
   }
 
   await interaction.deferUpdate();
-  const reason = interaction.fields.getTextInputValue('reason').trim() || null;
+  const reason = combineReason(interaction.fields.getStringSelectValues(PRESET_ID)[0], interaction.fields.getTextInputValue('reason'));
   const { client, guild, user } = interaction;
 
   let text;

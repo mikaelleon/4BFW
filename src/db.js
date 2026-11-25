@@ -152,6 +152,17 @@ if (schemaVersion < 7) {
     );
     PRAGMA user_version = 7;
   `);
+  schemaVersion = 7;
+}
+// v8: the admin-facing Submission ID counts per server (1, 2, 3...) instead of across every server the bot is in.
+// `id` stays the internal key; `sub_id` is what moderators see and type. Existing posts are numbered in posting order.
+if (schemaVersion < 8) {
+  db.exec(`
+    ALTER TABLE confessions ADD COLUMN sub_id INTEGER;
+    UPDATE confessions SET sub_id = (SELECT COUNT(*) FROM confessions c2 WHERE c2.guild_id = confessions.guild_id AND c2.id <= confessions.id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conf_subid ON confessions (guild_id, sub_id);
+    PRAGMA user_version = 8;
+  `);
 }
 
 // Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
@@ -206,14 +217,15 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
   try {
     db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
     const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
+    const { next: subId } = db.prepare('SELECT COALESCE(MAX(sub_id), 0) + 1 AS next FROM confessions WHERE guild_id = ?').get(guildId);
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO confessions (guild_id, number, author_id, content, has_image, created_at, tag, is_poll) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(guildId, counter, authorId, content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0);
+      .prepare('INSERT INTO confessions (guild_id, number, author_id, content, has_image, created_at, tag, is_poll, sub_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(guildId, counter, authorId, content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0, subId);
     extras.pollOptions?.forEach((label, idx) =>
       db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
     );
     db.exec('COMMIT');
-    return { id: Number(lastInsertRowid), number: counter };
+    return { id: Number(lastInsertRowid), number: counter, subId };
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
@@ -248,9 +260,14 @@ export function setConfessionMessage(guildId, id, channelId, messageId) {
     .run(channelId, messageId, guildId, id);
 }
 
-/** Look up by the admin-only confession ID (scoped to the server). */
+/** Look up by the internal key (used inside button ids). Scoped to the server. */
 export function getConfession(guildId, id) {
   return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND id = ?').get(guildId, id);
+}
+
+/** Look up by the Submission ID moderators see and type (counts per server). */
+export function getConfessionBySubId(guildId, subId) {
+  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND sub_id = ?').get(guildId, subId);
 }
 
 /** Newest still-posted confession with this public number (numbers repeat after a reset). */

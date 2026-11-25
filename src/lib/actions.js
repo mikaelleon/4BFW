@@ -5,13 +5,14 @@ import { untilTag } from './duration.js';
 import { anonRef, anonTitle } from './format.js';
 import { dmUser, modLog, notice } from './moderation.js';
 
-const label = (row) => `ID \`${row.id}\` (public ${anonRef(row.number)})`;
+const label = (row) => `ID \`${row.sub_id}\` (public ${anonRef(row.number)})`;
 const isLive = (row) => row.status !== 'deleted' && row.channel_id && row.message_id; // hidden posts still have a message
 
 /** Fields every log entry carries: the submission's text, sender and (while it exists) jump link. */
 function logBase(guild, row, actor, { gone = false } = {}) {
   return {
     id: row.id,
+    subId: row.sub_id,
     number: row.number,
     actor,
     content: row.content,

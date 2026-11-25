@@ -292,7 +292,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
     if (!usable(channel)) return fail('I cannot post in the submissions channel right now. Tell an admin.');
 
-    const { id, number } = db.createConfession(guild.id, userId, content, Boolean(image), { tag, pollOptions });
+    const { id, number, subId } = db.createConfession(guild.id, userId, content, Boolean(image), { tag, pollOptions });
     if (image) db.setConfessionImage(id, image.name, image.buffer);
     let msg;
     const { body, targets } = linkReferences(guild.id, content, replyToMessageId);
@@ -315,6 +315,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     // Admin-only: the ID appears in the mod log, never in the public channel.
     await modLog(guild, {
       id,
+      subId,
       number,
       url: msg.url,
       content,
@@ -329,7 +330,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
     // Fire and forget: DMs can be slow or closed, and must not delay the reply to the sender.
     notifyReplies(guild.client, guild, targets, userId, content, msg.url).catch((err) => console.error('Reply notify failed:', err));
-    return { ok: true, id, number, url: msg.url };
+    return { ok: true, id, subId, number, url: msg.url };
   });
 }
 
