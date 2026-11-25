@@ -236,6 +236,42 @@ if (schemaVersion < 10) {
   schemaVersion = 10;
 }
 
+// v11: auto-filter, optional approval queue, poll end/close, featured channel, content warnings, user preferences.
+if (schemaVersion < 11) {
+  db.exec(`
+    ALTER TABLE confessions ADD COLUMN reply_to TEXT;
+    ALTER TABLE confessions ADD COLUMN cw TEXT;
+    ALTER TABLE confessions ADD COLUMN poll_hours INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE confessions ADD COLUMN poll_ends_at INTEGER;
+    ALTER TABLE confessions ADD COLUMN poll_closed_at INTEGER;
+    ALTER TABLE confessions ADD COLUMN hold_reason TEXT;
+    ALTER TABLE confessions ADD COLUMN featured_channel_id TEXT;
+    ALTER TABLE confessions ADD COLUMN featured_message_id TEXT;
+    ALTER TABLE guilds ADD COLUMN approval_mode INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN filter_action TEXT NOT NULL DEFAULT 'reject';
+    ALTER TABLE guilds ADD COLUMN block_invites INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN block_links INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN poll_hours INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE guilds ADD COLUMN featured_channel_id TEXT;
+    ALTER TABLE guilds ADD COLUMN featured_threshold INTEGER NOT NULL DEFAULT 5;
+    CREATE TABLE IF NOT EXISTS filter_rules (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id   TEXT NOT NULL,
+      kind       TEXT NOT NULL,
+      pattern    TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_filter_guild ON filter_rules (guild_id);
+    CREATE TABLE IF NOT EXISTS user_prefs (
+      user_id    TEXT PRIMARY KEY,
+      notify_off INTEGER NOT NULL DEFAULT 0,
+      preview    INTEGER NOT NULL DEFAULT 0
+    );
+    PRAGMA user_version = 11;
+  `);
+  schemaVersion = 11;
+}
+
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
 db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 {
@@ -279,7 +315,8 @@ export function knownDmUsers() {
 const GUILD_FIELDS = new Set([
   'channel_id', 'log_channel_id', 'role_id', 'mod_role_id', 'sticky_id', 'cooldown', 'warn_limit', 'welcome_dm',
   'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days', 'highlight_channel_id', 'highlight_period',
-  'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days',
+  'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days', 'approval_mode', 'filter_action',
+  'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold',
 ]);
 
 export function getGuild(guildId) {
@@ -301,16 +338,34 @@ export function configuredGuilds() {
 
 /* ---------- confessions ---------- */
 
-/** `extras` = { tag, pollOptions } (both optional). Poll options are stored together with the confession. */
+/**
+ * `extras` = { tag, pollOptions, pollHours, replyTo, cw, pending, holdReason } (all optional).
+ * `pending` posts wait for a moderator: no public number yet (see assignNumber) and no poll end time yet.
+ * Poll options are stored together with the confession.
+ */
 export function createConfession(guildId, authorId, content, hasImage = false, extras = {}) {
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
-    const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
+    let counter = 0;
+    if (!extras.pending) {
+      db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
+      counter = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId).counter;
+    }
     const { next: subId } = db.prepare('SELECT COALESCE(MAX(sub_id), 0) + 1 AS next FROM confessions WHERE guild_id = ?').get(guildId);
+    const isPoll = extras.pollOptions?.length ? 1 : 0;
+    const pollHours = isPoll ? (extras.pollHours ?? 0) : 0;
+    const now = Date.now();
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, Date.now(), extras.tag ?? null, extras.pollOptions?.length ? 1 : 0, subId);
+      .prepare(
+        `INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id,
+                                  status, reply_to, cw, poll_hours, poll_ends_at, hold_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, now, extras.tag ?? null, isPoll, subId,
+        extras.pending ? 'pending' : 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
+        !extras.pending && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
+      );
     extras.pollOptions?.forEach((label, idx) =>
       db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
     );
@@ -320,6 +375,30 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+/** A moderator approved a pending post: give it the next public number and start its poll clock. Returns the number. */
+export function assignNumber(guildId, id) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
+    const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
+    const now = Date.now();
+    db.prepare(
+      "UPDATE confessions SET number = ?, status = 'posted', poll_ends_at = CASE WHEN poll_hours > 0 THEN ? + poll_hours * 3600000 ELSE NULL END WHERE guild_id = ? AND id = ?",
+    ).run(counter, now, guildId, id);
+    db.exec('COMMIT');
+    return counter;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+/** Posting an approved submission failed: put it back in the queue and give the number back. */
+export function revertAssign(guildId, id, number) {
+  db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
+  db.prepare("UPDATE confessions SET number = 0, status = 'pending', poll_ends_at = NULL WHERE guild_id = ? AND id = ?").run(guildId, id);
 }
 
 /** Undo a createConfession whose Discord post failed. Call only while holding the guild lock. */
@@ -684,4 +763,51 @@ export function listRecentPosted(guildId, limit) {
   return db
     .prepare("SELECT * FROM confessions WHERE guild_id = ? AND status = 'posted' AND message_id IS NOT NULL AND channel_id IS NOT NULL ORDER BY id DESC LIMIT ?")
     .all(guildId, limit);
+}
+
+/* ---------- auto-filter rules ---------- */
+
+export function addFilterRule(guildId, kind, pattern) {
+  const r = db.prepare('INSERT INTO filter_rules (guild_id, kind, pattern, created_at) VALUES (?, ?, ?, ?)').run(guildId, kind, pattern, Date.now());
+  return Number(r.lastInsertRowid);
+}
+
+export function listFilterRules(guildId) {
+  return db.prepare('SELECT * FROM filter_rules WHERE guild_id = ? ORDER BY id').all(guildId);
+}
+
+export function removeFilterRule(guildId, id) {
+  return db.prepare('DELETE FROM filter_rules WHERE guild_id = ? AND id = ?').run(guildId, id).changes > 0;
+}
+
+/* ---------- user preferences (global, not per server) ---------- */
+
+export function getPrefs(userId) {
+  return db.prepare('SELECT notify_off, preview FROM user_prefs WHERE user_id = ?').get(userId) ?? { notify_off: 0, preview: 0 };
+}
+
+/** `field` is 'notify_off' or 'preview'. */
+export function setPref(userId, field, value) {
+  if (field !== 'notify_off' && field !== 'preview') throw new Error(`Bad pref: ${field}`);
+  db.prepare('INSERT OR IGNORE INTO user_prefs (user_id) VALUES (?)').run(userId);
+  db.prepare(`UPDATE user_prefs SET ${field} = ? WHERE user_id = ?`).run(value ? 1 : 0, userId);
+}
+
+/* ---------- poll closing ---------- */
+
+export function closePollRow(id) {
+  return db.prepare('UPDATE confessions SET poll_closed_at = ? WHERE id = ? AND poll_closed_at IS NULL').run(Date.now(), id).changes > 0;
+}
+
+/** Open polls whose end time has passed. */
+export function listDuePolls(now = Date.now()) {
+  return db
+    .prepare("SELECT * FROM confessions WHERE is_poll = 1 AND poll_closed_at IS NULL AND poll_ends_at IS NOT NULL AND poll_ends_at <= ? AND status = 'posted'")
+    .all(now);
+}
+
+/* ---------- featured channel ---------- */
+
+export function setFeatured(id, channelId, messageId) {
+  db.prepare('UPDATE confessions SET featured_channel_id = ?, featured_message_id = ? WHERE id = ?').run(channelId, messageId, id);
 }

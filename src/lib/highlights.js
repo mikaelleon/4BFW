@@ -1,8 +1,8 @@
 // "Confession of the day / week": the most-liked post of the period, posted in a channel the admin picks.
-import { AttachmentBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import * as db from '../db.js';
 import { anonTitle } from './format.js';
-import { PAD_NAME, padPng } from './pad.js';
+import { postFiles, renderBody } from './render.js';
 import { getTag, tagText } from './tags.js';
 
 const DAY_MS = 86_400_000;
@@ -28,18 +28,19 @@ async function postHighlight(guild, cfg, period, row) {
   if (!channel || !channel.permissionsFor(me)?.has(needed)) return;
 
   const image = row.has_image ? db.getConfessionImage(row.id) : null;
+  const files = postFiles(image, row.cw);
   const tag = getTag(row.tag);
   const url = `https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id}`;
   const embed = new EmbedBuilder()
     .setColor(tag?.color ?? row.color ?? 0xf0b232)
     .setAuthor({ name: `🏆 Confession of the ${period.label}` })
     .setTitle(anonTitle(row.number))
-    .setDescription(`${row.rendered ?? row.content ?? ''}\n\n👍 **${row.ups}**  ❤️ **${row.hearts}**  👎 **${row.downs}**  ·  [Jump to post](${url})`.trim())
-    .setImage(`attachment://${image ? image.name : PAD_NAME}`);
+    .setDescription(`${renderBody(row.rendered ?? row.content ?? '', row.cw)}\n\n👍 **${row.ups}**  ❤️ **${row.hearts}**  👎 **${row.downs}**  ·  [Jump to post](${url})`.trim())
+    .setImage(`attachment://${files.imageName}`);
   if (tag) embed.setFooter({ text: tagText(row.tag) });
   await channel.send({
     embeds: [embed],
-    files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
+    files: files.files,
     allowedMentions: { parse: [] },
   });
 }

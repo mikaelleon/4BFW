@@ -1,11 +1,18 @@
 // Button reactions (👍 👎 ❤️) and poll votes under submissions. One choice per person, clicking it again withdraws it.
 // Nobody sees who voted: the user id is stored only to enforce the one-vote rule.
-import { MessageFlags } from 'discord.js';
+// Polls end at their end time or when the author (or a moderator) presses Close poll; results go in a reply.
+import { EmbedBuilder, MessageFlags } from 'discord.js';
 import * as db from '../db.js';
-import { MAX_POLL_OPTIONS, postComponents } from './confession.js';
+import { MAX_POLL_OPTIONS, buildPost, fetchPostMessage, postComponents } from './confession.js';
+import { isModerator } from './context.js';
+import { maybeFeature } from './featured.js';
+import { COLOR, anonTitle } from './format.js';
+import { userKey } from './identity.js';
+import { getTag } from './tags.js';
 
 export const MAX_OPTION_LEN = 40;
 const KINDS = new Set(['up', 'down', 'heart']);
+const EPHEMERAL = MessageFlags.Ephemeral;
 
 /** Poll options typed by a user (one per line, or split by `|` for the slash command). Empty = not a poll. */
 export function parsePollOptions(text, separator = /\r?\n/) {
@@ -21,8 +28,7 @@ export function parsePollOptions(text, separator = /\r?\n/) {
   return { options };
 }
 
-const gone = (interaction) =>
-  interaction.reply({ content: 'That submission is no longer available.', flags: MessageFlags.Ephemeral });
+const gone = (interaction, text = 'That submission is no longer available.') => interaction.reply({ content: text, flags: EPHEMERAL });
 
 function targetOf(interaction) {
   if (!interaction.inGuild()) return null;
@@ -35,13 +41,78 @@ export async function handleReactionButton(interaction) {
   const target = targetOf(interaction);
   if (!target || !KINDS.has(kind)) return gone(interaction);
   db.toggleReaction(target.id, interaction.user.id, kind);
-  return interaction.update({ components: postComponents(target) });
+  await interaction.update({ components: postComponents(db.getConfession(interaction.guildId, target.id)) });
+  // Featured channel (/setup featured): may now qualify, or its copy needs new numbers.
+  const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId).catch(() => null));
+  if (guild) maybeFeature(guild, target).catch((err) => console.error('Feature check failed:', err));
 }
 
 export async function handleVoteButton(interaction) {
   const idx = Number(interaction.customId.split(':')[2]);
   const target = targetOf(interaction);
   if (!target || !target.is_poll || !db.getPollOptions(target.id).some((o) => o.idx === idx)) return gone(interaction);
+  if (target.poll_closed_at) return gone(interaction, 'This poll is closed.');
   db.togglePollVote(target.id, interaction.user.id, idx);
   return interaction.update({ components: postComponents(target) });
+}
+
+/* ---------- closing a poll ---------- */
+
+const BAR = 10;
+
+/** Results card: one bar per option, the winner (or winners) marked. */
+function resultsEmbed(row) {
+  const options = db.getPollOptions(row.id);
+  const votes = db.pollCounts(row.id);
+  const counts = options.map((o) => votes.get(o.idx) ?? 0);
+  const total = counts.reduce((a, b) => a + b, 0);
+  const top = Math.max(0, ...counts);
+  const lines = options.map((o, i) => {
+    const share = total ? counts[i] / total : 0;
+    const filled = Math.round(share * BAR);
+    const mark = top > 0 && counts[i] === top ? '🏆' : '▫️';
+    return `${mark} **${o.label}**\n\`${'█'.repeat(filled)}${'░'.repeat(BAR - filled)}\` ${Math.round(share * 100)}% (${counts[i]})`;
+  });
+  const question = row.content ? `${row.cw ? '*(content warning)*' : row.content}\n\n` : '';
+  return new EmbedBuilder()
+    .setColor(getTag(row.tag)?.color ?? row.color ?? COLOR)
+    .setTitle(`📊 Poll results · ${anonTitle(row.number)}`)
+    .setDescription(`${question}${lines.join('\n\n')}\n\n**${total}** vote${total === 1 ? '' : 's'}`);
+}
+
+/** Lock the voting buttons, mark the poll closed and reply with the results. False when it was not open. */
+export async function closePoll(guild, row) {
+  const fresh = db.getConfession(guild.id, row.id);
+  if (!fresh?.is_poll || fresh.poll_closed_at || fresh.status !== 'posted') return false;
+  if (!db.closePollRow(fresh.id)) return false;
+  const closed = db.getConfession(guild.id, fresh.id);
+  const msg = await fetchPostMessage(guild, closed);
+  if (!msg) return false;
+  const image = closed.has_image ? db.getConfessionImage(closed.id) : null;
+  const post = buildPost(closed, image);
+  // Only the embed and buttons change; the attachments stay as they are.
+  await msg.edit({ embeds: post.embeds, components: post.components });
+  await msg.reply({ embeds: [resultsEmbed(closed)], allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
+  return true;
+}
+
+/** "Close poll" button: the author of the poll, or a moderator. */
+export async function handleClosePollButton(interaction) {
+  const target = targetOf(interaction);
+  if (!target?.is_poll) return gone(interaction);
+  const isAuthor = target.author_key === userKey(interaction.guildId, interaction.user.id);
+  const isMod = isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId));
+  if (!isAuthor && !isMod) return gone(interaction, 'Only the author of this poll, or a moderator, can close it.');
+  await interaction.deferUpdate();
+  const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
+  await closePoll(guild, target);
+}
+
+/** Scheduler: close every poll whose end time has passed. */
+export async function sweepPolls(client) {
+  for (const row of db.listDuePolls()) {
+    const guild = client.guilds.cache.get(row.guild_id);
+    if (!guild) continue;
+    await closePoll(guild, row).catch((err) => console.error(`Closing poll ${row.id} failed:`, err));
+  }
 }

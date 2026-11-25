@@ -77,7 +77,7 @@ export default {
       serverOpt(
         s
           .setName('options')
-          .setDescription('Cooldown, warnings, reports, self-delete window, data retention, welcome DM')
+          .setDescription('Cooldown, warnings, reports, approval queue, polls, self-delete, retention, welcome DM')
           .addIntegerOption((o) => o.setName('cooldown').setDescription('Seconds between submissions per user').setMinValue(0).setMaxValue(3600))
           .addIntegerOption((o) => o.setName('warn_limit').setDescription('Warnings before an automatic submission ban').setMinValue(1).setMaxValue(20))
           .addIntegerOption((o) =>
@@ -95,6 +95,12 @@ export default {
               .setDescription('Erase sender ID, text and image of posts after this many days (0 = keep forever)')
               .setMinValue(0)
               .setMaxValue(3650),
+          )
+          .addBooleanOption((o) =>
+            o.setName('approval').setDescription('New posts wait in the mod log until a moderator approves them (default: off, posts go up first)'),
+          )
+          .addIntegerOption((o) =>
+            o.setName('poll_hours').setDescription('Polls close by themselves after this many hours (0 = stay open until closed)').setMinValue(0).setMaxValue(168),
           )
           .addBooleanOption((o) => o.setName('welcome_dm').setDescription('DM the guide to new members when they join')),
       ),
@@ -135,6 +141,17 @@ export default {
                   { name: 'Off', value: 'off' },
                 ),
             ),
+        ),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        channelOpts(
+          s
+            .setName('featured')
+            .setDescription('Copy posts that collect enough 👍 + ❤️ to a featured channel')
+            .addIntegerOption((o) => o.setName('threshold').setDescription('Likes needed (👍 + ❤️). Default 5').setMinValue(1).setMaxValue(1000))
+            .addBooleanOption((o) => o.setName('off').setDescription('Turn the featured channel off')),
         ),
       ),
     )
@@ -242,6 +259,10 @@ export default {
       const retention = interaction.options.getInteger('retention_days');
       if (selfDelete !== null) patch.self_delete_minutes = selfDelete;
       if (retention !== null) patch.retention_days = retention;
+      const approval = interaction.options.getBoolean('approval');
+      const pollHours = interaction.options.getInteger('poll_hours');
+      if (approval !== null) patch.approval_mode = approval ? 1 : 0;
+      if (pollHours !== null) patch.poll_hours = pollHours;
       if (cooldown !== null) patch.cooldown = cooldown;
       if (warnLimit !== null) patch.warn_limit = warnLimit;
       if (welcome !== null) patch.welcome_dm = welcome ? 1 : 0;
@@ -252,7 +273,13 @@ export default {
           ? `\nHeads up: posts older than ${retention} day${retention === 1 ? '' : 's'} lose their stored sender ID, text and image within the hour. ` +
             'This cannot be undone, and the entries already in your mod log channel are not touched.'
           : '';
-      return interaction.editReply(`Options saved. Use \`/setup view\` to check.${warn}`);
+      const queue =
+        approval === true
+          ? '\nApproval is **on**: new posts wait in the mod log with Approve / Reject buttons and get their number when approved. The guide says posts go up first and are moderated afterwards, so update the rules text if you keep this on.'
+          : approval === false
+            ? '\nApproval is **off**: posts go up first and are moderated afterwards. Posts already waiting keep waiting; approve or reject them in the mod log.'
+            : '';
+      return interaction.editReply(`Options saved. Use \`/setup view\` to check.${warn}${queue}`);
     }
 
     if (sub === 'reset_count') {
@@ -311,6 +338,32 @@ export default {
       );
     }
 
+    if (sub === 'featured') {
+      if (interaction.options.getBoolean('off')) {
+        db.updateGuild(guild.id, { featured_channel_id: null });
+        return interaction.editReply('Featured channel is off. Posts that were already featured stay where they are.');
+      }
+      const { id, channel } = await pickChannel(interaction, guild);
+      const threshold = interaction.options.getInteger('threshold');
+      const patch = {};
+      if (id) {
+        if (!channel || !textTypes.includes(channel.type)) return interaction.editReply('That is not a text channel in this server.');
+        const me = guild.members.me ?? (await guild.members.fetchMe());
+        const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+        if (!channel.permissionsFor(me)?.has(needed)) {
+          return interaction.editReply('I need **View Channel**, **Send Messages** and **Embed Links** in that channel.');
+        }
+        patch.featured_channel_id = channel.id;
+      }
+      if (threshold !== null) patch.featured_threshold = threshold;
+      if (!Object.keys(patch).length) return interaction.editReply('Give a `channel` and/or a `threshold`.');
+      const saved = db.updateGuild(guild.id, patch);
+      if (!saved.featured_channel_id) return interaction.editReply(`Threshold saved (${saved.featured_threshold}). Pick a \`channel\` to turn the featured channel on.`);
+      return interaction.editReply(
+        `Posts with **${saved.featured_threshold}** or more 👍 + ❤️ are now copied to <#${saved.featured_channel_id}>. Posts that already have that many are featured on their next reaction.`,
+      );
+    }
+
     if (sub === 'refreshposts') {
       if (refreshing.has(guild.id)) return interaction.editReply('A refresh is already running for this server.');
       const rows = db.listRecentPosted(guild.id, interaction.options.getInteger('count') ?? 50);
@@ -354,6 +407,11 @@ export default {
     // view
     const c = cfg ?? {};
     const routes = db.listTagChannels(guild.id);
+    const ruleCount = db.listFilterRules(guild.id).length;
+    const filterSummary =
+      ruleCount || c.block_invites || c.block_links
+        ? `${ruleCount} rule${ruleCount === 1 ? '' : 's'}${c.block_invites ? ', invites blocked' : ''}${c.block_links ? ', links blocked' : ''} → ${c.filter_action === 'hold' ? 'hold' : 'reject'}`
+        : 'Off';
     const topicValue = routes.length
       ? routes.map((r) => `${tagText(r.tag) ?? r.tag} → <#${r.channel_id}>`).join('\n').slice(0, 1000)
       : 'None (everything goes to the main channel)';
@@ -373,6 +431,10 @@ export default {
         { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
         { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
         { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
+        { name: 'Approval queue', value: c.approval_mode ? 'On (posts wait for a moderator)' : 'Off (post first, moderate after)', inline: true },
+        { name: 'Auto-filter', value: filterSummary, inline: true },
+        { name: 'Poll length', value: c.poll_hours > 0 ? `${c.poll_hours} h` : 'Until closed', inline: true },
+        { name: 'Featured channel', value: c.featured_channel_id ? `<#${c.featured_channel_id}> (${c.featured_threshold} likes)` : 'Off', inline: true },
         { name: 'Self-delete window', value: c.self_delete_minutes > 0 ? `${c.self_delete_minutes} min` : 'Off', inline: true },
         { name: 'Data retention', value: c.retention_days > 0 ? `${c.retention_days} days` : 'Keep forever', inline: true },
         { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },

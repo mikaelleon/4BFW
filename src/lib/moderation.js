@@ -41,7 +41,7 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
     .addFields(
       // Entries that are not about one post (a ban appeal) have no ID and number.
       (subId ?? id) != null ? { name: 'Submission ID', value: `\`${subId ?? id}\``, inline: true } : BLANK, // per-server number; `id` is the internal key
-      (subId ?? id) != null ? { name: 'Public number', value: anonRef(number), inline: true } : BLANK,
+      (subId ?? id) != null ? { name: 'Public number', value: number ? anonRef(number) : 'Assigned on approval', inline: true } : BLANK,
       actor ? { name: 'Moderator', value: `<@${actor.id}>`, inline: true } : BLANK,
       authorId ? { name: 'Sender ID', value: `||${authorId}||`, inline: true } : BLANK,
       { name: 'Timestamp', value: formatDateTime(), inline: true },

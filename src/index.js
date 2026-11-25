@@ -23,15 +23,19 @@ import {
   REACT_PREFIX,
   REPORT_BUTTON_ID,
   VOTE_PREFIX,
+  APPROVAL_PREFIX,
+  CLOSE_POLL_ID,
   confessModal,
   ensureSticky,
-  submitConfession,
 } from './lib/confession.js';
-import { anonTitle, prefix } from './lib/format.js';
+import { prefix } from './lib/format.js';
 import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
-import { handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
+import { handleClosePollButton, handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
+import { APPROVAL_REASON_PREFIX, handleApprovalButton, handleApprovalModal } from './lib/approvals.js';
+import { DRAFT_PREFIX, handleDraftButton, resultText, submitOrPreview } from './lib/drafts.js';
+import { dmTagList, parseDmPost } from './lib/dm-syntax.js';
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
 import { startBackups } from './lib/backup.js';
@@ -87,7 +91,13 @@ client.once(Events.ClientReady, async (c) => {
 /** Handle one DM. `catchUp` = it was sent while the bot was offline: no usage reply for non-submissions, and the user is told it was late. */
 async function handleDm(message, catchUp = false) {
   const p = prefix();
-  const usage = `To post anonymously, send:\n\`${p} <your message>\`\nAttach an image to include it in your post.\n\nOr use the \`/fw\` command (it has an image option too).`;
+  const usage =
+    `To post anonymously, send:\n\`${p} <your message>\`\nAttach an image to include it in your post.\n\n` +
+    `Extras, in this order: a topic \`${p} #memes <message>\`, a content warning \`${p} cw: spoilers | <message>\`, ` +
+    `or a poll \`${p} poll 24h: Question? | Option A | Option B\` (the \`24h\` is optional).\n` +
+    `Topics: ${dmTagList()}\n\n` +
+    `Settings: \`${p} notify off\` (no DM when someone replies to you), \`${p} preview on\` (see your post and confirm before it goes up).\n\n` +
+    `Or use the \`/fw\` command, which has options for all of these.`;
   const match = message.content.trim().match(new RegExp(`^${escapeRe(p)}(?:\\s+([\\s\\S]*))?$`, 'i'));
   if (!match) return catchUp ? undefined : message.author.send(usage).catch(() => {});
 
@@ -112,6 +122,24 @@ async function handleDm(message, catchUp = false) {
     }
   }
 
+  // Personal settings: "fw notify off", "fw preview on".
+  const pref = text.match(/^(notify|preview)\s+(on|off)$/i);
+  if (pref) {
+    const [which, on] = [pref[1].toLowerCase(), pref[2].toLowerCase() === 'on'];
+    db.setPref(message.author.id, which === 'notify' ? 'notify_off' : 'preview', which === 'notify' ? !on : on);
+    return dm(
+      which === 'notify'
+        ? on ? 'Reply notifications are **on**.' : 'Reply notifications are **off**: I will not DM you when someone replies to your posts.'
+        : on ? 'Previews are **on**: I will show you the post and ask before it goes up.' : 'Previews are **off**.',
+    );
+  }
+
+  // Shortcuts before the message: #topic, "cw: label |", "poll 24h: question | a | b".
+  const parsed = parseDmPost(text);
+  if (parsed.error) return dm(parsed.error);
+  const body = parsed.text;
+  const extras = { tag: parsed.tag, cw: parsed.cw, pollOptions: parsed.pollOptions, pollHours: parsed.pollHours };
+
   const guilds = await candidateGuilds(client, message.author.id);
   if (guilds.length === 0) return dm('I found no server you are in that has submissions set up.');
 
@@ -119,8 +147,8 @@ async function handleDm(message, catchUp = false) {
   // server; submitConfession re-checks it against the server actually chosen.
   const limit = Math.max(...guilds.map(uploadLimit));
   const { image: attachment, extra, rejected } = pickImage(message.attachments, limit);
-  if (!text && !attachment) return dm(rejected ? imageHelp(limit) : usage);
-  if (text.length > MAX_LEN) return dm(`Too long. Max ${MAX_LEN} characters.`);
+  if (!body && !attachment) return dm(rejected ? imageHelp(limit) : usage);
+  if (body.length > MAX_LEN) return dm(`Too long. Max ${MAX_LEN} characters.`);
 
   let image = null;
   if (attachment) {
@@ -135,12 +163,15 @@ async function handleDm(message, catchUp = false) {
     .filter(Boolean)
     .join(' ');
   const late = catchUp ? ' I was offline when you sent it, so it went up late.' : '';
-  const posted = (res, guild) => (res.ok ? `Posted as **${anonTitle(res.number)}** in **${guild.name}**.${late}${note ? `\n${note}` : ''}` : res.error);
+  const posted = (res, guild) => (res.ok ? `${resultText(res, guild, { inGuildName: true })}${late}${note ? `\n${note}` : ''}` : res.error);
 
-  if (guilds.length === 1) return dm(posted(await submitConfession(guilds[0], message.author.id, text, null, image), guilds[0]));
+  if (guilds.length === 1) {
+    const out = await submitOrPreview(guilds[0], message.author.id, body, null, image, extras);
+    return dm(out.preview ?? posted(out.result, guilds[0]));
+  }
 
   const token = randomUUID().slice(0, 8);
-  pending.set(token, { userId: message.author.id, text, image, note, expires: Date.now() + 5 * 60_000 });
+  pending.set(token, { userId: message.author.id, text: body, image, note, extras, expires: Date.now() + 5 * 60_000 });
   const menu = new StringSelectMenuBuilder()
     .setCustomId(`confess:pick:${token}`)
     .setPlaceholder('Which server?')
@@ -277,6 +308,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith(`${REACT_PREFIX}:`)) return handleReactionButton(interaction);
     if (interaction.isButton() && interaction.customId.startsWith(`${VOTE_PREFIX}:`)) return handleVoteButton(interaction);
 
+    // Close poll button, approval queue buttons (and the reject-reason pop-up), preview Post / Cancel.
+    if (interaction.isButton() && interaction.customId === CLOSE_POLL_ID) return handleClosePollButton(interaction);
+    if (interaction.isButton() && interaction.customId.startsWith(`${APPROVAL_PREFIX}:`)) return handleApprovalButton(interaction);
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPROVAL_REASON_PREFIX}:`)) return handleApprovalModal(interaction);
+    if (interaction.isButton() && interaction.customId.startsWith(`${DRAFT_PREFIX}:`)) return handleDraftButton(interaction);
+
     // "Report" button under a submission, and its reason pop-up.
     if (interaction.isButton() && interaction.customId === REPORT_BUTTON_ID) return handleReportButton(interaction);
     if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REPORT_MODAL_PREFIX}:`)) return handleReportModal(interaction);
@@ -296,11 +333,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
       const poll = replyTo ? { options: null } : parsePollOptions(interaction.fields.getTextInputValue('poll'));
       if (poll.error) return interaction.editReply(poll.error);
-      const res = await submitConfession(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image, {
+      const out = await submitOrPreview(guild, interaction.user.id, interaction.fields.getTextInputValue('text'), replyTo, image, {
         tag,
+        cw: interaction.fields.getTextInputValue('cw'),
         pollOptions: poll.options,
       });
-      return interaction.editReply(res.ok ? `Posted as **${anonTitle(res.number)}**.` : res.error);
+      return interaction.editReply(out.preview ?? resultText(out.result, guild));
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('confess:pick:')) {
@@ -315,9 +353,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const guild = client.guilds.cache.get(interaction.values[0]);
       if (!guild) return interaction.editReply('I can no longer reach that server.');
       if (appealing) return interaction.editReply(await submitBanAppeal(guild, interaction.user, entry.appealText));
-      const res = await submitConfession(guild, interaction.user.id, entry.text, null, entry.image);
+      const out = await submitOrPreview(guild, interaction.user.id, entry.text, null, entry.image, entry.extras ?? {});
+      if (out.preview) return interaction.editReply(out.preview);
       return interaction.editReply(
-        res.ok ? `Posted as **${anonTitle(res.number)}** in **${guild.name}**.${entry.note ? `\n${entry.note}` : ''}` : res.error,
+        out.result.ok ? `${resultText(out.result, guild, { inGuildName: true })}${entry.note ? `\n${entry.note}` : ''}` : out.result.error,
       );
     }
   } catch (err) {

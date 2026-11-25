@@ -17,6 +17,9 @@ import { dmUser, modLog, notice } from './moderation.js';
 import { COLOR, anonRef, anonTitle, footerLine, prefix, randomSubmissionColor } from './format.js';
 import { PAD_NAME, padPng } from './pad.js';
 import { imageHelp, uploadLimit } from './image.js';
+import { checkFilters } from './filter.js';
+import { removeFeatured } from './featured.js';
+import { MAX_CW_LEN, postFiles, renderBody } from './render.js';
 import { TAGS, getTag, tagText } from './tags.js';
 
 export const MAX_LEN = 2000;
@@ -29,6 +32,8 @@ export const REPORT_BUTTON_ID = 'confess:report';
 export const REACT_PREFIX = 'confess:react'; // "confess:react:up|down|heart"
 export const VOTE_PREFIX = 'confess:vote'; // "confess:vote:<option index>"
 export const MAX_POLL_OPTIONS = 5;
+export const CLOSE_POLL_ID = 'confess:closepoll';
+export const APPROVAL_PREFIX = 'approval'; // buttons "approval:<ok|no>:<confession id>" on a pending submission
 const jumpUrl = (guildId, row) => `https://discord.com/channels/${guildId}/${row.channel_id}/${row.message_id}`;
 
 /* One queue per guild so numbering and the sticky message stay in order. */
@@ -48,7 +53,7 @@ const fail = (error) => ({ ok: false, error });
 /* ---------- embeds / components ---------- */
 
 /** Submission post: random color, and a transparent wide image (see pad.js) so every post has the same width. */
-export function confessionEmbed(number, content, color, imageName = PAD_NAME, tag = null) {
+export function confessionEmbed(number, content, color, imageName = PAD_NAME, tag = null, poll = {}) {
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(anonTitle(number))
@@ -57,7 +62,19 @@ export function confessionEmbed(number, content, color, imageName = PAD_NAME, ta
   if (content) embed.setDescription(content);
   const text = tagText(tag);
   if (text) embed.setAuthor({ name: text }); // the topic, shown above the title
+  if (poll.closed) embed.addFields({ name: 'Poll', value: 'Closed. Results are in the reply below.' });
+  else if (poll.endsAt) embed.addFields({ name: 'Poll', value: `Closes <t:${Math.floor(poll.endsAt / 1000)}:R>` });
   return embed;
+}
+
+/** The whole public post (embed, files, buttons) for a stored row. Used to post, restore and re-render. */
+export function buildPost(row, image) {
+  const { files, imageName } = postFiles(image, row.cw);
+  const embed = confessionEmbed(row.number, renderBody(row.rendered ?? row.content, row.cw), row.color ?? COLOR, imageName, row.tag, {
+    endsAt: row.poll_ends_at,
+    closed: Boolean(row.poll_closed_at),
+  });
+  return { embeds: [embed], files, components: postComponents(row), allowedMentions: { parse: [] } };
 }
 
 const reactionButton = (kind, emoji, count) => {
@@ -82,6 +99,7 @@ export function postComponents(row) {
     ),
   ];
   if (row.is_poll) {
+    const closed = Boolean(row.poll_closed_at);
     const votes = db.pollCounts(row.id);
     const options = db.getPollOptions(row.id);
     const total = options.reduce((sum, o) => sum + (votes.get(o.idx) ?? 0), 0);
@@ -93,10 +111,18 @@ export function postComponents(row) {
           return new ButtonBuilder()
             .setCustomId(`${VOTE_PREFIX}:${o.idx}`)
             .setLabel(`${o.label} · ${n}${share}`.slice(0, 80))
-            .setStyle(ButtonStyle.Primary);
+            .setStyle(closed ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setDisabled(closed);
         }),
       ),
     );
+    if (!closed) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(CLOSE_POLL_ID).setLabel('Close poll').setStyle(ButtonStyle.Secondary),
+        ),
+      );
+    }
   }
   return rows;
 }
@@ -138,6 +164,7 @@ async function notifyReplies(client, guild, targets, replierId, content, url) {
   const notified = new Set();
   for (const target of targets) {
     if (!target.author_id || target.author_id === replierId || notified.has(target.author_id)) continue; // empty = purged
+    if (db.getPrefs(target.author_id).notify_off) continue; // /fw notify:off
     notified.add(target.author_id);
     await dmUser(
       client,
@@ -203,6 +230,12 @@ export function confessModal(reply = null) {
         .setDescription('PNG, JPG, GIF or WEBP')
         .setFileUploadComponent(new FileUploadBuilder().setCustomId('image').setMinValues(0).setMaxValues(1).setRequired(false)),
     );
+  modal.addLabelComponents(
+    new LabelBuilder()
+      .setLabel('Content warning (optional)')
+      .setDescription('Hides your text behind a spoiler, e.g. "violence" or "spoilers".')
+      .setTextInputComponent(new TextInputBuilder().setCustomId('cw').setStyle(TextInputStyle.Short).setMaxLength(MAX_CW_LEN).setRequired(false)),
+  );
   if (!reply) {
     // Filling this in turns the submission into a poll: the text above is the question.
     modal.addLabelComponents(
@@ -253,9 +286,81 @@ export async function removeSticky(guild) {
 
 /* ---------- submitting ---------- */
 
+/** Pending submission: Approve / Reject buttons for the mod log. */
+export const approvalRow = (id) =>
+  new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${APPROVAL_PREFIX}:ok:${id}`).setLabel('Approve').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${APPROVAL_PREFIX}:no:${id}`).setLabel('Reject').setStyle(ButtonStyle.Danger),
+  );
+
+/** Extra mod-log fields describing a post: topic, content warning, poll options. */
+function logFields(row) {
+  const options = row.is_poll ? db.getPollOptions(row.id) : [];
+  return [
+    ...(row.tag ? [{ name: 'Topic', value: tagText(row.tag), inline: true }] : []),
+    ...(row.cw ? [{ name: 'Content warning', value: row.cw, inline: true }] : []),
+    ...(options.length ? [{ name: 'Poll options', value: options.map((o) => `• ${o.label}`).join('\n').slice(0, 1000) }] : []),
+  ];
+}
+
+/**
+ * Send a stored post to its channel (the topic's own channel when /setup tagchannel set one).
+ * Returns { msg, targets, row } or { error }. Call while holding the guild lock.
+ */
+async function publish(guild, row) {
+  const cfg = db.getGuild(guild.id);
+  const me = guild.members.me ?? (await guild.members.fetchMe());
+  const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+  const usable = (c) => c && c.permissionsFor(me)?.has(needed);
+  // If the topic's channel is gone or off-limits, use the main channel.
+  const topicId = row.tag ? db.getTagChannel(guild.id, row.tag) : null;
+  let channel = topicId ? await guild.channels.fetch(topicId).catch(() => null) : null;
+  if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
+  if (!usable(channel)) return { error: 'I cannot post in the submissions channel right now. Tell an admin.' };
+
+  const image = row.has_image ? db.getConfessionImage(row.id) : null;
+  const { body, targets } = linkReferences(guild.id, row.content, row.reply_to);
+  const color = getTag(row.tag)?.color ?? randomSubmissionColor(guild.id); // tagged posts are colour-coded by topic
+  db.setConfessionRendered(row.id, body, color);
+  const full = db.getConfession(guild.id, row.id);
+  let msg;
+  try {
+    msg = await channel.send(buildPost(full, image));
+  } catch (err) {
+    console.error('Failed to post confession:', err);
+    return { error: 'Discord refused the post. Try again in a bit.' };
+  }
+  db.setConfessionMessage(guild.id, row.id, channel.id, msg.id);
+  return { msg, targets, row: db.getConfession(guild.id, row.id) };
+}
+
+/** Everything that follows a post going live: the mod-log entry, the sticky, reply DMs. */
+async function afterPublish(guild, row, msg, targets, { title, actor } = {}) {
+  // Admin-only: the ID appears in the mod log, never in the public channel.
+  await modLog(guild, {
+    title,
+    actor,
+    id: row.id,
+    subId: row.sub_id,
+    number: row.number,
+    url: msg.url,
+    content: row.content,
+    authorId: row.author_id,
+    hasImage: Boolean(row.has_image),
+    controls: true,
+    fields: logFields(row),
+  }).catch(() => {});
+  await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
+  // Fire and forget: DMs can be slow or closed, and must not delay the reply to the sender.
+  notifyReplies(guild.client, guild, targets, row.author_id, row.content, msg.url).catch((err) => console.error('Reply notify failed:', err));
+}
+
 /**
  * `image` = { buffer, name } (re-uploaded into the channel).
- * `extras` = { tag, pollOptions }: a topic key, and/or the option labels that make this post a poll.
+ * `extras` = { tag, pollOptions, pollHours, cw }: topic key, poll option labels (+ how long it stays open),
+ * and a content warning label.
+ * Result: { ok: true, number, url } when posted, { ok: true, pending: true } when it waits for a moderator
+ * (approval mode, or held by the filter), { ok: false, error } otherwise.
  */
 export function submitConfession(guild, userId, rawContent, replyToMessageId = null, image = null, extras = {}) {
   return withLock(guild.id, async () => {
@@ -267,11 +372,13 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     if (content.length > MAX_LEN) return fail(`Too long. Max ${MAX_LEN} characters.`);
 
     const tag = getTag(extras.tag)?.key ?? null;
+    const cw = (extras.cw ?? '').trim().slice(0, MAX_CW_LEN) || null;
     const pollOptions = extras.pollOptions?.length ? extras.pollOptions : null;
     if (pollOptions && (pollOptions.length < 2 || pollOptions.length > MAX_POLL_OPTIONS)) {
       return fail(`A poll needs 2 to ${MAX_POLL_OPTIONS} options.`);
     }
     if (pollOptions && !content) return fail('A poll needs a question. Write it in the message.');
+    const pollHours = pollOptions ? (extras.pollHours ?? cfg.poll_hours ?? 0) : 0;
 
     const limit = uploadLimit(guild);
     if (image && image.buffer.length > limit) return fail(`That image is too big for this server. ${imageHelp(limit)}`);
@@ -283,62 +390,118 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     const waitMs = db.lastConfessionAt(guild.id, userId) + cfg.cooldown * 1000 - Date.now();
     if (waitMs > 0) return fail(`Slow down. Try again in ${Math.ceil(waitMs / 1000)}s.`);
 
-    const me = guild.members.me ?? (await guild.members.fetchMe());
-    const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
-    const usable = (c) => c && c.permissionsFor(me)?.has(needed);
-    // A topic can have its own channel (/setup tagchannel). If that one is gone or off-limits, use the main channel.
-    const topicId = tag ? db.getTagChannel(guild.id, tag) : null;
-    let channel = topicId ? await guild.channels.fetch(topicId).catch(() => null) : null;
-    if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
-    if (!usable(channel)) return fail('I cannot post in the submissions channel right now. Tell an admin.');
-
-    const { id, number, subId } = db.createConfession(guild.id, userId, content, Boolean(image), { tag, pollOptions });
-    if (image) db.setConfessionImage(id, image.name, image.buffer);
-    let msg;
-    const { body, targets } = linkReferences(guild.id, content, replyToMessageId);
-    const color = getTag(tag)?.color ?? randomSubmissionColor(guild.id); // tagged posts are colour-coded by topic
-    try {
-      msg = await channel.send({
-        embeds: [confessionEmbed(number, body, color, image ? image.name : PAD_NAME, tag)],
-        files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
-        components: postComponents({ id, is_poll: pollOptions ? 1 : 0 }),
-        allowedMentions: { parse: [] },
-      });
-    } catch (err) {
-      console.error('Failed to post confession:', err);
-      db.discardConfession(guild.id, id, number);
-      return fail('Discord refused the post. Try again in a bit.');
+    // Auto-filter: reject right away, or hold the post for a moderator (the author is only told it awaits review).
+    let holdReason = null;
+    const hit = checkFilters(guild.id, [content, cw, ...(pollOptions ?? [])], { cfg });
+    if (hit) {
+      if (cfg.filter_action === 'hold') holdReason = hit.detail;
+      else {
+        await modLog(guild, {
+          title: 'Post blocked by the filter',
+          authorId: userId,
+          content,
+          hasImage: Boolean(image),
+          fields: [{ name: 'Matched', value: hit.detail }],
+        }).catch(() => {});
+        return fail(hit.userMessage);
+      }
     }
-    db.setConfessionMessage(guild.id, id, channel.id, msg.id);
-    db.setConfessionRendered(id, body, color);
 
-    // Admin-only: the ID appears in the mod log, never in the public channel.
-    await modLog(guild, {
-      id,
-      subId,
-      number,
-      url: msg.url,
-      content,
-      authorId: userId,
-      hasImage: Boolean(image),
-      controls: true,
-      fields: [
-        ...(tag ? [{ name: 'Topic', value: tagText(tag), inline: true }] : []),
-        ...(pollOptions ? [{ name: 'Poll options', value: pollOptions.map((o) => `• ${o}`).join('\n').slice(0, 1000) }] : []),
-      ],
-    }).catch(() => {});
-    await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
-    // Fire and forget: DMs can be slow or closed, and must not delay the reply to the sender.
-    notifyReplies(guild.client, guild, targets, userId, content, msg.url).catch((err) => console.error('Reply notify failed:', err));
-    return { ok: true, id, subId, number, url: msg.url };
+    const pending = Boolean(cfg.approval_mode) || holdReason !== null;
+    const created = db.createConfession(guild.id, userId, content, Boolean(image), {
+      tag, pollOptions, pollHours, cw, replyTo: replyToMessageId, pending, holdReason,
+    });
+    if (image) db.setConfessionImage(created.id, image.name, image.buffer);
+    const row = db.getConfession(guild.id, created.id);
+
+    if (pending) {
+      await modLog(guild, {
+        title: holdReason ? 'Submission held by the filter' : 'Submission awaiting approval',
+        id: row.id,
+        subId: row.sub_id,
+        number: null, // assigned when approved
+        content,
+        authorId: userId,
+        hasImage: Boolean(image),
+        fields: [...(holdReason ? [{ name: 'Held because', value: holdReason }] : []), ...logFields(row)],
+        components: [approvalRow(row.id)],
+        ping: holdReason ? cfg.mod_role_id : null,
+      }).catch(() => {});
+      return { ok: true, pending: true, id: row.id, subId: row.sub_id };
+    }
+
+    const res = await publish(guild, row);
+    if (res.error) {
+      db.discardConfession(guild.id, created.id, created.number);
+      return fail(res.error);
+    }
+    await afterPublish(guild, res.row, res.msg, res.targets);
+    return { ok: true, id: created.id, subId: created.subId, number: created.number, url: res.msg.url };
   });
+}
+
+/** Approve a pending submission: it gets the next public number and goes live. */
+export function approveSubmission(guild, row, actor) {
+  return withLock(guild.id, async () => {
+    const fresh = db.getConfession(guild.id, row.id);
+    if (!fresh || fresh.status !== 'pending') return { ok: false, error: 'That submission is not waiting for approval any more.' };
+    if (fresh.purged_at) {
+      db.markConfession(guild.id, fresh.id, 'rejected');
+      return { ok: false, error: 'Its text was already erased by data retention, so it was rejected instead.' };
+    }
+    if (db.getBan(guild.id, fresh.author_key)) {
+      db.markConfession(guild.id, fresh.id, 'rejected');
+      return { ok: false, error: 'The author is banned now, so the submission was rejected instead.' };
+    }
+    const number = db.assignNumber(guild.id, fresh.id);
+    const res = await publish(guild, db.getConfession(guild.id, fresh.id));
+    if (res.error) {
+      db.revertAssign(guild.id, fresh.id, number); // stays in the queue; try again
+      return { ok: false, error: res.error };
+    }
+    await afterPublish(guild, res.row, res.msg, res.targets, { title: 'Submission approved', actor });
+    await dmUser(
+      guild.client,
+      fresh.author_id,
+      notice(`Your submission was approved in ${guild.name}`, `It is now live as **${anonTitle(number)}**.\n[View it](${res.msg.url})`),
+    );
+    return { ok: true, number, url: res.msg.url };
+  });
+}
+
+/** Reject a pending submission. The author is told, with the reason if the moderator gave one. */
+export async function rejectSubmission(guild, row, actor, reason) {
+  const fresh = db.getConfession(guild.id, row.id);
+  if (!fresh || fresh.status !== 'pending') return { ok: false, error: 'That submission is not waiting for approval any more.' };
+  db.markConfession(guild.id, fresh.id, 'rejected');
+  const dmed = await dmUser(
+    guild.client,
+    fresh.author_id,
+    notice(
+      `Your submission was not approved in ${guild.name}`,
+      `A moderator reviewed your submission and it will not be posted.\n**Reason:** ${reason ?? 'No reason given'}`,
+    ),
+  );
+  await modLog(guild, {
+    title: 'Submission rejected',
+    actor,
+    id: fresh.id,
+    subId: fresh.sub_id,
+    number: null,
+    content: fresh.content,
+    authorId: fresh.author_id,
+    hasImage: Boolean(fresh.has_image),
+    reason,
+    fields: logFields(fresh),
+  }).catch(() => {});
+  return { ok: true, dmed };
 }
 
 export const resetCounterSafely = (guild, startAt) => withLock(guild.id, async () => db.resetCounter(guild.id, startAt));
 
 /* ---------- moderation helpers ---------- */
 
-async function fetchPostMessage(guild, row) {
+export async function fetchPostMessage(guild, row) {
   if (!row.channel_id || !row.message_id) return null;
   const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
   return channel?.messages.fetch(row.message_id).catch(() => null) ?? null;
@@ -364,6 +527,7 @@ export async function hideConfessionMessage(guild, row) {
     allowedMentions: { parse: [] },
   });
   db.markConfession(guild.id, row.id, 'hidden');
+  await removeFeatured(guild, row).catch(() => {});
   return true;
 }
 
@@ -373,15 +537,7 @@ export async function restoreConfessionMessage(guild, row) {
   const msg = await fetchPostMessage(guild, row);
   if (!msg) return false;
   const image = row.has_image ? db.getConfessionImage(row.id) : null;
-  await msg.edit({
-    embeds: [
-      confessionEmbed(row.number, row.rendered ?? row.content, row.color ?? randomSubmissionColor(guild.id), image ? image.name : PAD_NAME, row.tag),
-    ],
-    files: [image ? new AttachmentBuilder(image.buffer, { name: image.name }) : new AttachmentBuilder(padPng(), { name: PAD_NAME })],
-    attachments: [],
-    components: postComponents(row),
-    allowedMentions: { parse: [] },
-  });
+  await msg.edit({ ...buildPost(row, image), attachments: [] });
   db.markConfession(guild.id, row.id, 'posted');
   db.clearReports(row.id);
   return true;
@@ -393,4 +549,5 @@ export async function deleteConfessionMessage(guild, row) {
     await channel?.messages.delete(row.message_id).catch(() => {});
   }
   db.markConfession(guild.id, row.id, 'deleted');
+  await removeFeatured(guild, row).catch(() => {});
 }

@@ -1,6 +1,8 @@
-// Background jobs, once a minute: lift timed bans whose time is up, post the confession of the day / week,
+// Background jobs, once a minute: lift timed bans whose time is up, close polls that ran out, post the
+// confession of the day / week,
 // and (hourly) apply each server's data-retention period.
 import * as db from '../db.js';
+import { sweepPolls } from './engagement.js';
 import { runHighlights } from './highlights.js';
 import { dmUser, notice, systemLog } from './moderation.js';
 
@@ -21,6 +23,7 @@ export function startScheduler(client) {
   const tick = () => {
     sweepBans(client).catch((err) => console.error('Ban sweep failed:', err));
     runHighlights(client).catch((err) => console.error('Highlights failed:', err));
+    sweepPolls(client).catch((err) => console.error('Poll sweep failed:', err));
     // Data retention (/setup options retention_days): hourly is plenty, the periods are measured in days.
     if (Date.now() - lastPurge >= PURGE_EVERY_MS) {
       lastPurge = Date.now();
