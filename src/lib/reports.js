@@ -1,11 +1,10 @@
 // "Report" button under each submission. Reports are anonymous: the mod log only ever shows a count and the optional
 // reason, never who reported. The reporter id is stored once per post just so nobody can report twice.
-import { LabelBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { ActionRowBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import * as db from '../db.js';
 import { hideConfessionMessage } from './confession.js';
 import { anonRef, anonTitle } from './format.js';
 import { modLog } from './moderation.js';
-import { PRESET_ID, combineReason, reasonDropdown } from './reasons.js';
 
 export const REPORT_MODAL_PREFIX = 'confess:reportmodal'; // "confess:reportmodal:<message id>"
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -22,12 +21,16 @@ export async function handleReportButton(interaction) {
   const modal = new ModalBuilder()
     .setCustomId(`${REPORT_MODAL_PREFIX}:${interaction.message.id}`)
     .setTitle(`Report ${anonTitle(target.number)}`)
-    .addLabelComponents(
-      reasonDropdown('report', { required: true }),
-      new LabelBuilder()
-        .setLabel('Details (optional)')
-        .setDescription('Your name is never shown to the moderators.')
-        .setTextInputComponent(new TextInputBuilder().setCustomId('reason').setStyle(TextInputStyle.Paragraph).setMaxLength(400).setRequired(false)),
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel('What is wrong with it? (optional)')
+          .setPlaceholder('Your name is never shown to the moderators.')
+          .setStyle(TextInputStyle.Paragraph)
+          .setMaxLength(500)
+          .setRequired(false),
+      ),
     );
   return interaction.showModal(modal);
 }
@@ -40,7 +43,7 @@ export async function handleReportModal(interaction) {
   const target = db.getConfessionByMessage(guild.id, messageId);
   if (!target || target.status !== 'posted') return interaction.editReply('That submission is no longer available to report.');
 
-  const reason = combineReason(interaction.fields.getStringSelectValues(PRESET_ID)[0], interaction.fields.getTextInputValue('reason'));
+  const reason = interaction.fields.getTextInputValue('reason').trim() || null;
   if (!db.addReport(target.id, interaction.user.id, reason)) return interaction.editReply('You already reported this submission.');
 
   const cfg = db.getGuild(guild.id);
@@ -49,7 +52,6 @@ export async function handleReportModal(interaction) {
   const hide = limit > 0 && count >= limit;
   const base = {
     id: target.id,
-    subId: target.sub_id,
     number: target.number,
     content: target.content,
     hasImage: Boolean(target.has_image),

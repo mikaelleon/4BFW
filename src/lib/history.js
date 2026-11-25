@@ -28,7 +28,6 @@ export function historyEmbed(guild, row) {
   const notes = db.listNotes(guild.id, userId);
   const ban = db.getBan(guild.id, userId);
   const active = db.countWarnings(guild.id, userId);
-  const subOf = new Map(posts.map((p) => [p.id, p.sub_id])); // warnings and notes point at the internal key
 
   const banText = !ban ? 'Not banned' : ban.expires_at ? `Banned until ${untilTag(ban.expires_at)}` : 'Banned (permanent)';
   const expiry = cfg.warn_expiry_days > 0 ? ` (warnings expire after ${cfg.warn_expiry_days} days)` : '';
@@ -36,7 +35,7 @@ export function historyEmbed(guild, row) {
   const statusCount = (s) => posts.filter((p) => p.status === s).length;
   return new EmbedBuilder()
     .setColor(COLOR)
-    .setTitle(`History for the author of submission ${row.sub_id}`)
+    .setTitle(`History for the author of submission ${row.id}`)
     .setDescription(`Sender ID: ||${userId}||\n${banText}\nActive warnings: **${active}/${cfg.warn_limit}**${expiry}`)
     .addFields(
       {
@@ -46,7 +45,7 @@ export function historyEmbed(guild, row) {
           (p) => {
             const reports = db.countReports(p.id);
             const tag = `${p.status}${reports ? `, ${reports} report${reports === 1 ? '' : 's'}` : ''}`;
-            return `\`${p.sub_id}\` ${anonRef(p.number)} · ${tag} · ${rel(p.created_at)}\n> ${clip(p.content, 70) || '*(image only)*'}`;
+            return `\`${p.id}\` ${anonRef(p.number)} · ${tag} · ${rel(p.created_at)}\n> ${clip(p.content, 70) || '*(image only)*'}`;
           },
           'None',
         ),
@@ -55,7 +54,7 @@ export function historyEmbed(guild, row) {
         name: `Warnings (${warnings.length})`,
         value: section(
           warnings,
-          (w) => `${w.expired ? '~~' : ''}${rel(w.created_at)}${subOf.get(w.confession_id) ? ` · ID \`${subOf.get(w.confession_id)}\`` : ''} · ${clip(w.reason, 80) || 'No reason'}${w.expired ? '~~ *(expired)*' : ''}`,
+          (w) => `${w.expired ? '~~' : ''}${rel(w.created_at)}${w.confession_id ? ` · ID \`${w.confession_id}\`` : ''} · ${clip(w.reason, 80) || 'No reason'}${w.expired ? '~~ *(expired)*' : ''}`,
           'None',
         ),
       },
@@ -63,7 +62,7 @@ export function historyEmbed(guild, row) {
         name: `Moderator notes (${notes.length})`,
         value: section(
           notes,
-          (n) => `${rel(n.created_at)} · <@${n.moderator_id}>${subOf.get(n.confession_id) ? ` · ID \`${subOf.get(n.confession_id)}\`` : ''}\n> ${clip(n.note, 200)}`,
+          (n) => `${rel(n.created_at)} · <@${n.moderator_id}>${n.confession_id ? ` · ID \`${n.confession_id}\`` : ''}\n> ${clip(n.note, 200)}`,
           'None. Add one with `/mod note`.',
         ),
       },
