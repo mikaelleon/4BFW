@@ -20,13 +20,15 @@ import { imageHelp, uploadLimit } from './image.js';
 import { checkFilters } from './filter.js';
 import { DUPLICATE_MESSAGE, checkDailyCap, checkEligibility, isDuplicate } from './gates.js';
 import { removeFeatured } from './featured.js';
-import { closedNotice } from './hours.js';
+import { closedNotice, holdPrompt, postingMode, postingResumesAt } from './hours.js';
 import { userKey } from './identity.js';
 import { closeThread, ensureThread, openChannel } from './threads.js';
 import { MAX_CW_LEN, postFiles, renderBody } from './render.js';
 import { TAGS, getTag, tagText } from './tags.js';
 
 export const MAX_LEN = 2000;
+/** While posting is on hold, how many submissions one person can have waiting. */
+export const MAX_WAITING = 3;
 export const OPEN_BUTTON_ID = 'confess:open';
 export const GUIDE_BUTTON_ID = 'confess:guide';
 export const MODAL_ID = 'confess:modal';
@@ -384,11 +386,11 @@ async function publish(guild, row) {
   let root = null;
   if (row.thread_root) {
     root = db.getConfession(guild.id, row.thread_root);
-    if (!root || root.status !== 'posted') return { error: 'That submission is no longer available to reply to.' };
+    if (!root || root.status !== 'posted') return { error: 'That submission is no longer available to reply to.', gone: root?.status !== 'hidden' };
     const opened = await ensureThread(guild, root);
     if (opened.error) return opened;
     channel = opened.thread;
-    if (channel.locked) return { error: 'Replies are closed on that submission.' };
+    if (channel.locked) return { error: 'Replies are closed on that submission.', gone: true };
     if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads, PermissionFlagsBits.EmbedLinks])) {
       return { error: 'I cannot post in that thread right now. Tell an admin.' };
     }
@@ -417,7 +419,7 @@ async function publish(guild, row) {
     msg = await channel.send(buildPost(full, image));
   } catch (err) {
     console.error('Failed to post confession:', err);
-    return { error: 'Discord refused the post. Try again in a bit.' };
+    return { error: 'Discord refused the post. Try again in a bit.', refused: true };
   }
   db.setConfessionMessage(guild.id, row.id, channel.id, msg.id);
   return { msg, targets, row: db.getConfession(guild.id, row.id) };
@@ -461,6 +463,9 @@ export async function whyCannotPost(guild, userId) {
 
   const closed = closedNotice(cfg);
   if (closed) return closed;
+  if (postingMode(cfg) === 'hold' && db.countWaiting(guild.id, userId) >= MAX_WAITING) {
+    return `You already have ${MAX_WAITING} submissions waiting to be posted. Send more after posting resumes.`;
+  }
 
   const tooNew = checkEligibility(member, cfg);
   if (tooNew) return tooNew;
@@ -476,7 +481,9 @@ export async function whyCannotPost(guild, userId) {
  * `extras` = { tag, pollOptions, pollHours, cw }: topic key, poll option labels (+ how long it stays open),
  * and a content warning label.
  * Result: { ok: true, number, url } when posted, { ok: true, pending: true } when it waits for a moderator
- * (approval mode, or held by the filter), { ok: false, error } otherwise.
+ * (approval mode, or held by the filter), { ok: true, scheduled: true } when saved until posting resumes,
+ * { ok: false, needsConfirm: true, prompt } when posting is on hold and the author has not agreed to wait
+ * (`extras.acceptDelay`; nothing is saved), { ok: false, error } otherwise.
  */
 export function submitConfession(guild, userId, rawContent, replyToMessageId = null, image = null, extras = {}) {
   return withLock(guild.id, async () => {
@@ -520,7 +527,12 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
       }
     }
 
+    // Posting on hold: every other check has passed, so ask before anything is saved.
+    const onHold = postingMode(cfg) === 'hold';
+    if (onHold && !extras.acceptDelay) return { ok: false, needsConfirm: true, prompt: holdPrompt(cfg), error: 'Posting is paused.' };
+
     const pending = Boolean(cfg.approval_mode) || holdReason !== null;
+    const scheduled = onHold && !pending;
     // A reply goes into a thread when the server uses them, or when it answers something already inside one.
     const target = replyToMessageId ? db.getConfessionByMessage(guild.id, replyToMessageId) : null;
     const threadRoot = target ? (target.thread_root ?? (cfg.auto_thread ? target.id : null)) : null;
@@ -529,7 +541,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     const opTag = Boolean(extras.showOp) && opOf?.author_key === userKey(guild.id, userId);
 
     const created = db.createConfession(guild.id, userId, content, Boolean(image), {
-      tag, pollOptions, pollHours, cw, replyTo: replyToMessageId, pending, holdReason, threadRoot, opTag,
+      tag, pollOptions, pollHours, cw, replyTo: replyToMessageId, pending, scheduled, holdReason, threadRoot, opTag,
     });
     if (image) db.setConfessionImage(created.id, image.name, image.buffer);
     const row = db.getConfession(guild.id, created.id);
@@ -547,7 +559,22 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
         components: [approvalRow(row.id)],
         ping: holdReason ? cfg.mod_role_id : null,
       }).catch(() => {});
-      return { ok: true, pending: true, id: row.id, subId: row.sub_id };
+      return { ok: true, pending: true, id: row.id, subId: row.sub_id, onHold };
+    }
+
+    if (scheduled) {
+      await modLog(guild, {
+        title: 'Submission saved until posting resumes',
+        id: row.id,
+        subId: row.sub_id,
+        number: null,
+        content,
+        authorId: userId,
+        hasImage: Boolean(image),
+        controls: true, // moderators can remove it before it goes up
+        fields: logFields(row),
+      }).catch(() => {});
+      return { ok: true, scheduled: true, id: row.id, subId: row.sub_id, resumesAt: postingResumesAt(cfg) };
     }
 
     const res = await publish(guild, row);
@@ -572,6 +599,17 @@ export function approveSubmission(guild, row, actor) {
     if (db.getBan(guild.id, fresh.author_key)) {
       db.markConfession(guild.id, fresh.id, 'rejected');
       return { ok: false, error: 'The author is banned now, so the submission was rejected instead.' };
+    }
+    const cfg = db.getGuild(guild.id);
+    if (postingMode(cfg) === 'hold') {
+      db.markConfession(guild.id, fresh.id, 'scheduled');
+      const resumesAt = postingResumesAt(cfg);
+      await dmUser(
+        guild.client,
+        fresh.author_id,
+        notice(`Your submission was approved in ${guild.name}`, `Posting is on hold, so it will go up ${expectedTime(resumesAt)}.`),
+      );
+      return { ok: true, scheduled: true, resumesAt };
     }
     const number = db.assignNumber(guild.id, fresh.id);
     const res = await publish(guild, db.getConfession(guild.id, fresh.id));
@@ -615,6 +653,105 @@ export async function rejectSubmission(guild, row, actor, reason) {
     fields: logFields(fresh),
   }).catch(() => {});
   return { ok: true, dmed };
+}
+
+/** "<time>" for messages about a saved submission. */
+export const expectedTime = (ms) => (ms ? `around <t:${Math.ceil(ms / 1000)}:f>` : 'when moderators resume posting');
+
+const RELEASE_GAP_MS = 3000;
+const MAX_REFUSALS = 5;
+const releasing = new Set(); // servers whose saved submissions are being posted right now
+
+/** A saved submission that can never go up: record it and tell the author why. */
+async function dropScheduled(guild, row, why) {
+  db.markConfession(guild.id, row.id, 'rejected');
+  await dmUser(guild.client, row.author_id, notice(`Your saved submission was not posted in ${guild.name}`, why));
+  await modLog(guild, {
+    title: 'Saved submission not posted',
+    id: row.id,
+    subId: row.sub_id,
+    number: null,
+    content: row.content,
+    authorId: row.author_id,
+    hasImage: Boolean(row.has_image),
+    reason: why,
+    fields: logFields(row),
+  }).catch(() => {});
+}
+
+/** Post one saved submission if posting is open. 'next' = carry on with the following one, 'stop' = try again later. */
+function releaseOne(guild, id) {
+  return withLock(guild.id, async () => {
+    if (postingMode(db.getGuild(guild.id)) !== 'open') return 'stop'; // paused again while we were working
+    const row = db.getConfession(guild.id, id);
+    if (!row || row.status !== 'scheduled') return 'next'; // a moderator removed it
+    if (row.purged_at) return dropScheduled(guild, row, 'Its text was erased by data retention before it could be posted.').then(() => 'next');
+    if (db.getBan(guild.id, row.author_key)) {
+      await dropScheduled(guild, row, 'You can no longer post in this server.');
+      return 'next';
+    }
+    if (row.reply_to) {
+      const target = db.getConfessionByMessage(guild.id, row.reply_to);
+      if (target?.status === 'hidden') return 'next'; // under review: wait for the moderators
+      if (!target || target.status !== 'posted') {
+        await dropScheduled(guild, row, 'The submission you replied to is no longer available.');
+        return 'next';
+      }
+    }
+    const image = row.has_image ? db.getConfessionImage(row.id) : null;
+    if (image && image.buffer.length > uploadLimit(guild)) {
+      await dropScheduled(guild, row, `Its image is now too big for this server. ${imageHelp(uploadLimit(guild))}`);
+      return 'next';
+    }
+
+    const number = db.assignNumber(guild.id, row.id);
+    const res = await publish(guild, db.getConfession(guild.id, row.id));
+    if (res.error) {
+      db.revertAssign(guild.id, row.id, number, 'scheduled');
+      if (res.gone) {
+        await dropScheduled(guild, row, res.error);
+        return 'next';
+      }
+      if (res.refused) {
+        // One post Discord will not take must not hold up everything behind it for ever.
+        if (db.addReleaseTry(row.id) >= MAX_REFUSALS) await dropScheduled(guild, row, 'Discord refused to accept it several times.');
+        return 'next';
+      }
+      // Hidden thread: only this one waits. Anything else (channel gone, no permission) affects the rest too.
+      return row.thread_root && db.getConfession(guild.id, row.thread_root)?.status === 'hidden' ? 'next' : 'stop';
+    }
+    await afterPublish(guild, res.row, res.msg, res.targets, { title: 'Saved submission posted' });
+    // Not awaited: a slow DM must not hold the posting queue.
+    dmUser(
+      guild.client,
+      row.author_id,
+      notice(`Your saved submission is up in ${guild.name}`, `It is now live as **${anonTitle(number)}**.\n[View it](${res.msg.url})`),
+    ).catch(() => {});
+    return 'posted';
+  });
+}
+
+/**
+ * Post the saved submissions of a server, oldest first and a few seconds apart, for as long as posting stays open.
+ * Safe to call at any time (every minute, and right after a resume). Returns how many went up.
+ */
+export async function releaseScheduled(guild, { gapMs = RELEASE_GAP_MS } = {}) {
+  if (releasing.has(guild.id)) return 0;
+  releasing.add(guild.id);
+  let posted = 0;
+  try {
+    let spaceOut = false; // wait only between two posts, never after the last one
+    for (const { id } of db.listScheduled(guild.id)) {
+      if (spaceOut) await new Promise((r) => setTimeout(r, gapMs));
+      const outcome = await releaseOne(guild, id);
+      if (outcome === 'stop') break;
+      spaceOut = outcome === 'posted';
+      if (spaceOut) posted++;
+    }
+  } finally {
+    releasing.delete(guild.id);
+  }
+  return posted;
 }
 
 export const resetCounterSafely = (guild, startAt) => withLock(guild.id, async () => db.resetCounter(guild.id, startAt));
@@ -663,7 +800,9 @@ export async function restoreConfessionMessage(guild, row) {
   return true;
 }
 
-export async function deleteConfessionMessage(guild, row) {
+export const deleteConfessionMessage = (guild, target) => withLock(guild.id, () => removePost(guild, db.getConfession(guild.id, target.id)));
+
+async function removePost(guild, row) {
   if (row.channel_id && row.message_id) {
     const channel = await openChannel(guild, row.channel_id);
     await channel?.messages.delete(row.message_id).catch(() => {});

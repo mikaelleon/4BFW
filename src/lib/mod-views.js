@@ -2,7 +2,7 @@
 import { EmbedBuilder } from 'discord.js';
 import * as db from '../db.js';
 import { COLOR, anonRef } from './format.js';
-import { closedNotice, clockText, hasQuietHours } from './hours.js';
+import { clockText, hasQuietHours, postingStatus } from './hours.js';
 import { getTag, tagText } from './tags.js';
 
 export const PAGE_SIZE = 8;
@@ -43,11 +43,11 @@ function listEmbed(guild, title, { rows, total }, page, empty, note) {
     .setFooter({ text: `${total} found · page ${page} of ${pages}` });
 }
 
-/** Everything waiting for a moderator: posts awaiting approval and posts hidden after reports, oldest first. */
+/** Everything not up that could be: awaiting approval, hidden after reports, or saved until posting resumes. */
 export function queueEmbed(guild, page = 1) {
   const found = db.listQueue(guild.id, PAGE_SIZE, (page - 1) * PAGE_SIZE);
   const note = found.total
-    ? 'Approve or reject waiting posts with the buttons on their mod-log entry. Hidden posts: `/mod restore` or `/mod delete`.'
+    ? 'Pending: Approve or Reject on the mod-log entry. Hidden: `/mod restore` or `/mod delete`. Scheduled: posts when posting resumes, `/mod delete` to stop it.'
     : '';
   return listEmbed(guild, 'Moderation queue', found, page, 'Nothing is waiting. 🎉', note);
 }
@@ -71,8 +71,10 @@ export function statsEmbed(guild, days = 30, now = Date.now()) {
   const topics = s.topics.length
     ? s.topics.map((t) => `${getTag(t.tag) ? tagText(t.tag) : 'No topic'}: **${t.n}**`).join('\n')
     : 'No posts';
-  const state = closedNotice(cfg, now) ?? 'Open';
-  const quiet = hasQuietHours(cfg) ? `\nQuiet hours: ${clockText(cfg.quiet_start)} to ${clockText(cfg.quiet_end)}` : '';
+  const state = postingStatus(cfg, now);
+  const quiet = hasQuietHours(cfg)
+    ? `\nQuiet hours: ${clockText(cfg.quiet_start)} to ${clockText(cfg.quiet_end)} (${cfg.quiet_hold ? 'hold' : 'closed'})`
+    : '';
   return new EmbedBuilder()
     .setColor(COLOR)
     .setTitle(`Stats · last ${days} day${days === 1 ? '' : 's'}`)
@@ -80,7 +82,7 @@ export function statsEmbed(guild, days = 30, now = Date.now()) {
       { name: 'Submissions', value: `**${total}** (${(total / days).toFixed(1)} per day)\n${s.replies} replies · ${s.polls} polls · ${s.images} with images` },
       {
         name: 'Where they are now',
-        value: `${count('posted')} posted · ${count('pending')} waiting · ${count('hidden')} hidden · ${count('deleted')} deleted · ${count('rejected')} rejected`,
+        value: `${count('posted')} posted · ${count('pending')} awaiting approval · ${count('scheduled')} scheduled · ${count('hidden')} hidden · ${count('deleted')} deleted · ${count('rejected')} rejected`,
       },
       { name: 'Top topics', value: topics },
       { name: 'Moderation', value: `${s.reports} reports · ${s.warnings} warnings · ${s.activeBans} active ban${s.activeBans === 1 ? '' : 's'} (now)` },

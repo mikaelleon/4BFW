@@ -22,7 +22,7 @@ export default {
 
     const minutes = db.getGuild(interaction.guildId)?.self_delete_minutes ?? 0;
     if (minutes <= 0) return reply('Deleting your own submissions is turned off in this server. Ask a moderator.');
-    const left = row.created_at + minutes * 60_000 - Date.now();
+    const left = (row.posted_at ?? row.created_at) + minutes * 60_000 - Date.now(); // counted from when it went up
     if (left <= 0) return reply(`You can only delete a submission within ${minutes} minute${minutes === 1 ? '' : 's'} of posting it. Ask a moderator.`);
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });

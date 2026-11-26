@@ -6,7 +6,7 @@ import { COLOR } from './format.js';
 import { uploadLimit } from './image.js';
 import { usesTokenSecret } from './identity.js';
 import { getTag } from './tags.js';
-import { closedNotice } from './hours.js';
+import { postingMode, postingStatus } from './hours.js';
 import { THREAD_PERMS } from './threads.js';
 
 const OK = '✅';
@@ -113,8 +113,9 @@ export async function runDoctor(guild) {
   if (cfg.report_limit > 0 && !cfg.log_channel_id) {
     sections.Settings.push(line(WARN, 'Posts auto-hide after reports but there is no mod log to review them in.'));
   }
-  const closed = closedNotice(cfg);
-  if (closed) sections.Settings.push(line(INFO, closed.replace(/\n/g, ' ')));
+  if (cfg.channel_id && postingMode(cfg) !== 'open') sections.Settings.push(line(INFO, postingStatus(cfg).replace(/\n/g, ' ')));
+  const saved = db.countScheduled(guild.id);
+  if (saved > 0) sections.Settings.push(line(INFO, `${saved} saved submission${saved === 1 ? ' is' : 's are'} waiting for posting to resume (\`/mod queue\`).`));
   if (cfg.cooldown === 0) sections.Settings.push(line(WARN, 'Cooldown is 0: people can post as fast as they like.'));
   const pending = db.countPending(guild.id);
   if (pending > 0) sections.Settings.push(line(WARN, `${pending} submission${pending === 1 ? ' is' : 's are'} waiting for a moderator in the mod log.`));

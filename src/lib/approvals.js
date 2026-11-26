@@ -56,7 +56,7 @@ export async function handleApprovalButton(interaction) {
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
   const res = await approveSubmission(guild, row, interaction.user);
   if (!res.ok) return interaction.followUp({ content: res.error, flags: EPHEMERAL }).catch(() => {});
-  await interaction.editReply(resolvedEntry(interaction, 'Approved')).catch(() => {});
+  await interaction.editReply(resolvedEntry(interaction, res.scheduled ? 'Approved, posts when posting resumes,' : 'Approved')).catch(() => {});
 }
 
 export async function handleApprovalModal(interaction) {

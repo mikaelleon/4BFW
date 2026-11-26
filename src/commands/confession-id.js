@@ -25,6 +25,6 @@ export default {
     }
     const row = db.getConfessionByMessage(interaction.guildId, interaction.targetId);
     if (!row) return reply('That message is not a submission I posted.');
-    return reply(`Submission ID: \`${row.sub_id}\` (public ${anonRef(row.number)}, ${row.status})\nUse it with \`/mod\`.`);
+    return reply(`Submission ID: \`${row.sub_id}\` (${row.number ? `public ${anonRef(row.number)}` : 'no public number yet'}, ${row.status})\nUse it with \`/mod\`.`);
   },
 };

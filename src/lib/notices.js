@@ -55,11 +55,13 @@ const reasonLine = (reason) => `**Reason:** ${reason ?? 'No reason given'}`;
 // Only the public number is shown: the admin-only Submission ID never reaches users.
 // The text itself is not repeated in the DM: link to the post, or to its channel once the post is gone (a deleted message's link is dead).
 function postLine(guild, row, gone) {
+  if (!row.number) return '**Post:** your submission that was not posted yet';
   const label = anonRef(row.number);
   if (!row.channel_id) return `**Post:** ${label}`;
   if (gone || !row.message_id) return `**Post:** ${label} in <#${row.channel_id}>`;
   return `**Post:** [${label}](https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id})`;
 }
+const postName = (row) => (row.number ? anonTitle(row.number) : 'submission');
 const removed = (deleted) => (deleted ? ' and has been removed' : '');
 
 /**
@@ -70,7 +72,7 @@ export function warningNotice(guild, row, { reason, warningId, count, limit, exp
   const color = level(count, limit);
   const lead = color === 'yellow' && !banned ? 'Heads up: your' : 'Your';
   const lines = [
-    `${lead} **${anonTitle(row.number)}** was found to violate our community guidelines${removed(deleted)}.`,
+    `${lead} **${postName(row)}** was found to violate our community guidelines${removed(deleted)}.`,
     '',
     reasonLine(reason),
     postLine(guild, row, deleted),
@@ -99,7 +101,7 @@ export function warningNotice(guild, row, { reason, warningId, count, limit, exp
 /** Ban DM. `until` = Discord timestamp text for a timed ban, or null for a permanent one. */
 export function banNotice(guild, row, { reason, until = null, deleted = false }) {
   return build(guild, COLORS.red, `Posting disabled in ${guild.name}`, [
-    `Your **${anonTitle(row.number)}** was found to violate our community guidelines${removed(deleted)}, and posting has been disabled.`,
+    `Your **${postName(row)}** was found to violate our community guidelines${removed(deleted)}, and posting has been disabled.`,
     '',
     reasonLine(reason),
     postLine(guild, row, deleted),
@@ -115,7 +117,7 @@ export function banNotice(guild, row, { reason, until = null, deleted = false })
 /** Removal DM (a moderator deleted the post without warning or banning). */
 export function deletionNotice(guild, row, { reason }) {
   return build(guild, COLORS.orange, `Post removed in ${guild.name}`, [
-    `Your **${anonTitle(row.number)}** was found to violate our community guidelines and has been removed.`,
+    `Your **${postName(row)}** was found to violate our community guidelines and has been removed.`,
     '',
     reasonLine(reason),
     postLine(guild, row, true),

@@ -13,7 +13,8 @@ import { banAuthor, deleteSubmission, noteAuthor, restoreSubmission, unbanAuthor
 import { parseDuration, untilTag } from '../lib/duration.js';
 import { historyEmbed } from '../lib/history.js';
 import { COLOR, anonRef } from '../lib/format.js';
-import { closedNotice, isPaused } from '../lib/hours.js';
+import { isPaused, postingMode, postingStatus } from '../lib/hours.js';
+import { releaseScheduled } from '../lib/confession.js';
 import { modLog } from '../lib/moderation.js';
 import { queueEmbed, searchEmbed, statsEmbed } from '../lib/mod-views.js';
 import { tagChoices } from '../lib/tags.js';
@@ -97,14 +98,23 @@ export default {
     .addSubcommand((s) =>
       s
         .setName('pause')
-        .setDescription('Stop new submissions and replies for a while')
+        .setDescription('Stop posting for a while: close submissions, or save them for later')
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription('What happens to new submissions (default: closed)')
+            .addChoices(
+              { name: 'closed: accept nothing', value: 'closed' },
+              { name: 'hold: accept now, post when the pause ends', value: 'hold' },
+            ),
+        )
         .addStringOption((o) => o.setName('duration').setDescription('How long: 30m, 12h, 7d (leave empty until /mod resume)').setMaxLength(8))
-        .addStringOption((o) => o.setName('reason').setDescription('Shown to people who try to post').setMaxLength(200))
+        .addStringOption((o) => o.setName('reason').setDescription('Shown to people who try to submit').setMaxLength(200))
         .addStringOption(serverOpt),
     )
-    .addSubcommand((s) => s.setName('resume').setDescription('Allow submissions again after /mod pause').addStringOption(serverOpt))
+    .addSubcommand((s) => s.setName('resume').setDescription('End a /mod pause and post anything saved').addStringOption(serverOpt))
     .addSubcommand((s) =>
-      s.setName('queue').setDescription('Posts waiting for approval or hidden after reports').addIntegerOption(pageOpt).addStringOption(serverOpt),
+      s.setName('queue').setDescription('Posts awaiting approval, hidden after reports, or saved for later').addIntegerOption(pageOpt).addStringOption(serverOpt),
     )
     .addSubcommand((s) =>
       s
@@ -123,7 +133,7 @@ export default {
           o
             .setName('status')
             .setDescription('Status')
-            .addChoices(...['posted', 'pending', 'hidden', 'deleted', 'rejected'].map((v) => ({ name: v, value: v }))),
+            .addChoices(...['posted', 'pending', 'scheduled', 'hidden', 'deleted', 'rejected'].map((v) => ({ name: v, value: v }))),
         )
         .addIntegerOption((o) => o.setName('days').setDescription('Only the last N days').setMinValue(1).setMaxValue(3650))
         .addIntegerOption(pageOpt)
@@ -151,7 +161,7 @@ export default {
         .setColor(COLOR)
         .setTitle(`Submission ID ${id}`)
         .addFields(
-          { name: 'Public number', value: anonRef(row.number), inline: true },
+          { name: 'Public number', value: row.number ? anonRef(row.number) : 'Not posted yet', inline: true },
           { name: 'Status', value: row.status, inline: true },
           { name: 'Posted', value: time(Math.floor(row.created_at / 1000), 'R'), inline: true },
           { name: "Author's warnings", value: `${db.countWarnings(guild.id, row.author_key)}/${cfg.warn_limit}`, inline: true },
@@ -210,16 +220,40 @@ async function serverWide(interaction, guild, sub) {
     if (parsed.error) return interaction.editReply('Duration looks like `30m`, `12h`, `7d` or `2w` (at most 365 days). Leave it empty to pause until `/mod resume`.');
     const until = parsed.ms ? Date.now() + parsed.ms : 0;
     const reason = options.getString('reason')?.trim() || null;
-    db.updateGuild(guild.id, { paused_until: until, pause_reason: reason });
+    const hold = options.getString('mode') === 'hold';
+    const fresh = db.updateGuild(guild.id, { paused_until: until, pause_reason: reason, pause_hold: hold ? 1 : 0 });
     const length = until ? `until ${untilTag(until)}` : 'until `/mod resume`';
-    await modLog(guild, { title: 'Submissions paused', actor: user, reason, fields: [{ name: 'Length', value: length, inline: true }] });
-    return interaction.editReply(`Submissions and replies are paused ${length}. Posts already waiting can still be approved.`);
+    await modLog(guild, {
+      title: hold ? 'Posting paused (submissions are saved)' : 'Submissions paused',
+      actor: user,
+      reason,
+      fields: [{ name: 'Length', value: length, inline: true }],
+    });
+    if (!hold) {
+      const saved = db.countScheduled(guild.id);
+      const kept = saved ? ` ${saved} saved submission${saved === 1 ? '' : 's'} will post after the pause.` : '';
+      return interaction.editReply(`Submissions and replies are paused ${length}.${kept} Posts awaiting approval can still be approved.`);
+    }
+    // Quiet hours set to "closed" still refuse submissions while they run.
+    const note = postingMode(fresh) === 'closed' ? ` Right now quiet hours are closing submissions: ${postingStatus(fresh)}` : '';
+    return interaction.editReply(
+      `Posting is paused ${length}. New submissions and replies are saved after their author agrees to wait, and go up when posting resumes.${note}`,
+    );
   }
 
   // resume
-  const quiet = closedNotice({ ...cfg, paused_until: null });
-  if (!isPaused(cfg)) return interaction.editReply(quiet ? `Submissions are not paused. ${quiet}` : 'Submissions are not paused.');
-  db.updateGuild(guild.id, { paused_until: null, pause_reason: null });
-  await modLog(guild, { title: 'Submissions resumed', actor: user });
-  return interaction.editReply(quiet ? `The pause is lifted. ${quiet}` : 'Submissions are open again.');
+  const after = { ...cfg, paused_until: null };
+  const quiet = postingMode(after) === 'open' ? null : `Quiet hours still apply: ${postingStatus(after)}`;
+  if (!isPaused(cfg)) return interaction.editReply(quiet ? `There is no pause to lift. ${quiet}` : 'Submissions are not paused.');
+  db.updateGuild(guild.id, { paused_until: null, pause_reason: null, pause_hold: 0 });
+  await modLog(guild, { title: 'Pause lifted', actor: user });
+  const saved = db.countScheduled(guild.id);
+  const queued = saved ? ` ${saved} saved submission${saved === 1 ? '' : 's'} ${quiet ? 'will post after that' : 'are being posted now'}.` : '';
+  releaseSoon(guild);
+  return interaction.editReply(quiet ? `The pause is lifted. ${quiet}${queued}` : `Submissions are open again.${queued}`);
+}
+
+/** Start posting saved submissions without making the moderator wait for it (it does nothing unless posting is open). */
+function releaseSoon(guild) {
+  releaseScheduled(guild).catch((err) => console.error(`Posting saved submissions failed for ${guild.id}:`, err));
 }

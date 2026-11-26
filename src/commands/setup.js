@@ -13,6 +13,7 @@ import { COLOR, anonRef } from '../lib/format.js';
 import { postComponents, refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
 import { runDoctor } from '../lib/doctor.js';
 import { clockText, hasQuietHours, parseClock } from '../lib/hours.js';
+import { releaseScheduled } from '../lib/confession.js';
 import { THREAD_PERMS } from '../lib/threads.js';
 import { ensureOwnerPin, hasPin } from '../lib/owner-pin.js';
 import { highlightTimers } from '../lib/highlights.js';
@@ -191,9 +192,15 @@ export default {
       serverOpt(
         s
           .setName('quiethours')
-          .setDescription('Close submissions at the same time every day')
-          .addStringOption((o) => o.setName('start').setDescription('Closes at, 24-hour clock, e.g. 23:00').setMaxLength(5))
-          .addStringOption((o) => o.setName('end').setDescription('Reopens at, e.g. 05:00').setMaxLength(5))
+          .setDescription('Stop posting at the same time every day')
+          .addStringOption((o) => o.setName('start').setDescription('Starts at, 24-hour clock, e.g. 23:00').setMaxLength(5))
+          .addStringOption((o) => o.setName('end').setDescription('Ends at, e.g. 05:00').setMaxLength(5))
+          .addStringOption((o) =>
+            o
+              .setName('mode')
+              .setDescription('closed: accept nothing (default). hold: accept now, post afterwards')
+              .addChoices({ name: 'closed: accept nothing', value: 'closed' }, { name: 'hold: accept now, post afterwards', value: 'hold' }),
+          )
           .addBooleanOption((o) => o.setName('off').setDescription('Turn quiet hours off')),
       ),
     )
@@ -474,17 +481,30 @@ export default {
     }
 
     if (sub === 'quiethours') {
+      // Whatever changes, saved submissions may now be free to go up (this does nothing while posting is not open).
+      const release = () => releaseScheduled(guild).catch((err) => console.error(`Posting saved submissions failed for ${guild.id}:`, err));
       if (interaction.options.getBoolean('off')) {
         db.updateGuild(guild.id, { quiet_start: null, quiet_end: null });
+        release();
         return interaction.editReply('Quiet hours are off.');
       }
-      const start = parseClock(interaction.options.getString('start'));
-      const end = parseClock(interaction.options.getString('end'));
+      const startText = interaction.options.getString('start');
+      const endText = interaction.options.getString('end');
+      const mode = interaction.options.getString('mode');
+      // `mode` alone changes how the existing hours behave.
+      const keepHours = mode && !startText && !endText && hasQuietHours(cfg);
+      const start = keepHours ? cfg.quiet_start : parseClock(startText);
+      const end = keepHours ? cfg.quiet_end : parseClock(endText);
       if (start === null || end === null) return interaction.editReply('Give both `start` and `end` as 24-hour times like `23:00` and `05:00`, or pass `off: true`.');
-      if (start === end) return interaction.editReply('`start` and `end` must differ. To close submissions for now, use `/mod pause`.');
-      db.updateGuild(guild.id, { quiet_start: start, quiet_end: end });
+      if (start === end) return interaction.editReply('`start` and `end` must differ. To stop posting for now, use `/mod pause`.');
+      const hold = mode ? mode === 'hold' : Boolean(cfg?.quiet_hold);
+      db.updateGuild(guild.id, { quiet_start: start, quiet_end: end, quiet_hold: hold ? 1 : 0 });
+      release();
+      const effect = hold
+        ? 'Nothing is posted; new submissions are saved after their author agrees to wait, and go up afterwards.'
+        : 'Submissions and replies are closed.';
       return interaction.editReply(
-        `Submissions and replies close every day from **${clockText(start)}** to **${clockText(end)}** (${process.env.TIMEZONE || 'Asia/Manila'}).`,
+        `Quiet hours: every day from **${clockText(start)}** to **${clockText(end)}** (${process.env.TIMEZONE || 'Asia/Manila'}). ${effect}`,
       );
     }
 
@@ -533,7 +553,7 @@ export default {
         { name: 'Confession of the day / week', value: highlight, inline: true },
         {
           name: 'Threads · quiet hours',
-          value: `Reply threads ${c.auto_thread ? 'on' : 'off'} · ${hasQuietHours(c) ? `quiet ${clockText(c.quiet_start)} to ${clockText(c.quiet_end)}` : 'no quiet hours'}`,
+          value: `Reply threads ${c.auto_thread ? 'on' : 'off'} · ${hasQuietHours(c) ? `quiet ${clockText(c.quiet_start)} to ${clockText(c.quiet_end)} (${c.quiet_hold ? 'hold' : 'closed'})` : 'no quiet hours'}`,
         },
         { name: 'Topic channels', value: topicValue },
         { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },

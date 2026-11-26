@@ -1,4 +1,5 @@
-// When submissions are closed: a moderator pause (/mod pause) or the daily quiet hours (/setup quiethours).
+// When posting stops: a moderator pause (/mod pause) or the daily quiet hours (/setup quiethours). Each is either
+// "closed" (nothing is accepted) or "hold" (submissions are accepted, saved, and posted once posting resumes).
 // Quiet hours are clock times in the bot's TIMEZONE and may run past midnight (23:00 to 05:00).
 const MINUTE = 60_000;
 const DAY_MINUTES = 24 * 60;
@@ -41,14 +42,64 @@ export function quietUntil(cfg, now = Date.now()) {
 export const isPaused = (cfg, now = Date.now()) => cfg?.paused_until != null && (cfg.paused_until === 0 || cfg.paused_until > now);
 
 const stamp = (ms) => `<t:${Math.ceil(ms / 1000)}:R>`;
+const when = (ms) => `<t:${Math.ceil(ms / 1000)}:f> (${stamp(ms)})`;
 
-/** What to tell someone who tries to post while submissions are closed, or null when they are open. */
+/** When posting can happen again if nothing is changed (epoch ms), or null when only /mod resume can tell. */
+export function postingResumesAt(cfg, now = Date.now()) {
+  let at = now;
+  // A pause can end inside quiet hours (and the other way round), so follow them until both are over.
+  for (let i = 0; i < 5; i++) {
+    if (isPaused(cfg, at)) {
+      if (cfg.paused_until === 0) return null;
+      at = cfg.paused_until;
+      continue;
+    }
+    const quiet = quietUntil(cfg, at);
+    if (!quiet) break;
+    at = quiet;
+  }
+  return at;
+}
+
+/**
+ * 'open', 'hold' (accept now, post later) or 'closed' (accept nothing). When a pause and quiet hours overlap,
+ * closed wins over hold.
+ */
+export function postingMode(cfg, now = Date.now()) {
+  const paused = isPaused(cfg, now);
+  const quiet = quietUntil(cfg, now) !== null;
+  if ((paused && !cfg.pause_hold) || (quiet && !cfg.quiet_hold)) return 'closed';
+  return paused || quiet ? 'hold' : 'open';
+}
+
+/** What to tell someone who tries to submit while nothing is accepted, or null when submissions are accepted. */
 export function closedNotice(cfg, now = Date.now()) {
-  if (isPaused(cfg, now)) {
+  if (isPaused(cfg, now) && !cfg.pause_hold) {
     const reason = cfg.pause_reason ? `\nReason: ${cfg.pause_reason}` : '';
     const back = cfg.paused_until ? ` They reopen ${stamp(cfg.paused_until)}.` : '';
     return `Submissions are paused right now.${back}${reason}`;
   }
   const until = quietUntil(cfg, now);
-  return until ? `It is quiet hours, so submissions are closed. They reopen ${stamp(until)}.` : null;
+  return until && !cfg.quiet_hold ? `It is quiet hours, so submissions are closed. They reopen ${stamp(until)}.` : null;
+}
+
+/** The question put to an author before a submission is saved for later. */
+export function holdPrompt(cfg, now = Date.now()) {
+  const paused = isPaused(cfg, now);
+  const why = paused ? 'Posting is paused right now.' : 'It is quiet hours, so nothing is being posted right now.';
+  const reason = paused && cfg.pause_reason ? `\nReason: ${cfg.pause_reason}` : '';
+  const at = postingResumesAt(cfg, now);
+  const expected = at
+    ? `Your submission is expected to be posted ${when(at)}. The time can change if moderators pause or resume.`
+    : 'Your submission would be posted when moderators resume posting. There is no set time yet.';
+  return `**${why}**${reason}\n${expected}\n\nPress **Post later** to save it until then, or **Cancel** to throw it away.`;
+}
+
+/** One line for moderators: the state of submissions right now. */
+export function postingStatus(cfg, now = Date.now()) {
+  const mode = postingMode(cfg, now);
+  if (mode === 'open') return 'Open';
+  if (mode === 'closed') return closedNotice(cfg, now);
+  const at = postingResumesAt(cfg, now);
+  return `Accepting submissions, posting is on hold. ${at ? `Resumes ${stamp(at)}.` : 'Resumes with `/mod resume`.'}`;
 }

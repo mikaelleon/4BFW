@@ -6,7 +6,7 @@ import { anonRef, anonTitle } from './format.js';
 import { dmUser, modLog, notice } from './moderation.js';
 import { banNotice, deletionNotice, warningCode, warningNotice } from './notices.js';
 
-const label = (row) => `ID \`${row.sub_id}\` (public ${anonRef(row.number)})`;
+const label = (row) => `ID \`${row.sub_id}\` (${row.number ? `public ${anonRef(row.number)}` : 'not posted yet'})`;
 const isLive = (row) => row.status !== 'deleted' && row.channel_id && row.message_id; // hidden posts still have a message
 
 /** Fields every log entry carries: the submission's text, sender and (while it exists) jump link. */

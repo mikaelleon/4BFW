@@ -44,6 +44,23 @@ Under each post: **Reply**, **Report**, and 👍 👎 ❤️ (one reaction per p
 
 Topics (also `#key` in DMs): Confessions, Crush / Love, Rants & Vents, Shoutouts, Campus Life, Academics, Questions, Lost & Found, Events, Org & Department, Memes, Random, Suggestions, Mental Health, Open Letters. `/setup tagchannel` sends one topic to its own channel. The button stays in the main channel.
 
+## Pausing and holding
+
+`/mod pause` and quiet hours each have a mode. If both are active and either is **closed**, submissions are closed.
+
+| Mode | New submissions and replies |
+|---|---|
+| `closed` (default) | Refused, with the reopening time when there is one |
+| `hold` | The author is told when it is expected to go up and presses **Post later** or **Cancel**. Nothing is saved on Cancel, or with no answer in 10 minutes |
+
+- All checks (ban, cooldown, daily cap, repost blocker, filter) apply when submitting. One person can have 3 submissions waiting.
+- Saved submissions go up when posting resumes (checked every minute, at once after `/mod resume`), oldest first and a few seconds apart. The author gets a DM with the link. They survive restarts.
+- The public number and the poll clock start when the post goes up. So does the self-delete window.
+- Moderators see them in the mod log and `/mod queue`, and can stop one with **Delete** or `/mod delete`. Authors cannot withdraw one themselves after **Post later**.
+- With the approval queue on, a submission still needs approval. Approving during a hold saves it until posting resumes. During a `closed` pause, approving posts it at once.
+- Not posted, with a DM saying why: the author was banned meanwhile, the post replied to was deleted, its thread was locked, or Discord refused it 5 times.
+- The expected time moves if the pause or quiet hours change. With no duration there is no time to show.
+
 ## Reply threads
 
 Off by default. With `/setup threads enabled:true` every new post gets a thread, and **Reply** posts into it through the bot. Older posts get a thread at their first reply. The bot needs **Create Public Threads** and **Send Messages in Threads** (an existing invite may lack them).
@@ -87,7 +104,7 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 - `refreshposts [count]` — put the current buttons on the newest posts (default 50)
 - `refresh` — repost the button message
 - `threads enabled:true|false` — a reply thread under each new post (see Reply threads)
-- `quiethours start:23:00 end:05:00` — close submissions and replies at those times every day, in `TIMEZONE` (`off:true` to stop)
+- `quiethours start:23:00 end:05:00 [mode:closed|hold]` — stop posting at those times every day, in `TIMEZONE` (`off:true` to stop). See Pausing and holding
 - `view` — current settings
 - `doctor` — channels, permissions, deleted roles, settings that contradict each other, pending posts, and the ID hash secret
 
@@ -104,8 +121,8 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 Not tied to one submission:
 
-- `pause [duration] [reason]` and `resume` — stop new submissions and replies for a while. Posts already waiting can still be approved
-- `queue` — posts waiting for approval or hidden after reports, oldest first
+- `pause [mode:closed|hold] [duration] [reason]` and `resume` — stop posting for a while. See Pausing and holding
+- `queue` — posts awaiting approval, hidden after reports, or saved until posting resumes, oldest first
 - `stats [days]` — server totals: posts, replies, topics, reports, warnings, bans, queue
 - `search [text] [topic] [status] [days]` — find submissions. There is no search by person
 

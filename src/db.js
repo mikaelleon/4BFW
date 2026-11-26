@@ -346,6 +346,25 @@ if (schemaVersion < 15) {
   schemaVersion = 15;
 }
 
+// v16: posting can be put on hold: submissions are saved ('scheduled') and posted when it resumes.
+if (schemaVersion < 16) {
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      ALTER TABLE guilds ADD COLUMN pause_hold INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE guilds ADD COLUMN quiet_hold INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE confessions ADD COLUMN posted_at INTEGER;
+      ALTER TABLE confessions ADD COLUMN release_tries INTEGER NOT NULL DEFAULT 0;
+      PRAGMA user_version = 16;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  schemaVersion = 16;
+}
+
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
 db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 {
@@ -392,7 +411,7 @@ const GUILD_FIELDS = new Set([
   'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days', 'approval_mode', 'filter_action',
   'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold', 'min_join_days',
   'min_account_days', 'daily_cap', 'dup_hours', 'owner_pin', 'auto_thread', 'paused_until', 'pause_reason',
-  'quiet_start', 'quiet_end',
+  'quiet_start', 'quiet_end', 'pause_hold', 'quiet_hold',
 ]);
 
 export function getGuild(guildId) {
@@ -415,15 +434,17 @@ export function configuredGuilds() {
 /* ---------- confessions ---------- */
 
 /**
- * `extras` = { tag, pollOptions, pollHours, replyTo, cw, pending, holdReason, threadRoot, opTag } (all optional).
- * `pending` posts wait for a moderator: no public number yet (see assignNumber) and no poll end time yet.
+ * `extras` = { tag, pollOptions, pollHours, replyTo, cw, pending, scheduled, holdReason, threadRoot, opTag } (all optional).
+ * `pending` posts wait for a moderator, `scheduled` ones for posting to resume: neither has a public number (see
+ * assignNumber) or a poll end time yet.
  * Poll options are stored together with the confession.
  */
 export function createConfession(guildId, authorId, content, hasImage = false, extras = {}) {
   db.exec('BEGIN IMMEDIATE');
   try {
+    const waiting = extras.pending ? 'pending' : extras.scheduled ? 'scheduled' : null;
     let counter = 0;
-    if (!extras.pending) {
+    if (!waiting) {
       db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
       counter = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId).counter;
     }
@@ -439,8 +460,8 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
       )
       .run(
         guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, now, extras.tag ?? null, isPoll, subId,
-        extras.pending ? 'pending' : 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
-        !extras.pending && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
+        waiting ?? 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
+        !waiting && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
         extras.threadRoot ?? null, extras.opTag ? 1 : 0,
       );
     extras.pollOptions?.forEach((label, idx) =>
@@ -454,7 +475,7 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
   }
 }
 
-/** A moderator approved a pending post: give it the next public number and start its poll clock. Returns the number. */
+/** A waiting post goes live: give it the next public number and start its poll clock. Returns the number. */
 export function assignNumber(guildId, id) {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -462,8 +483,8 @@ export function assignNumber(guildId, id) {
     const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
     const now = Date.now();
     db.prepare(
-      "UPDATE confessions SET number = ?, status = 'posted', poll_ends_at = CASE WHEN poll_hours > 0 THEN ? + poll_hours * 3600000 ELSE NULL END WHERE guild_id = ? AND id = ?",
-    ).run(counter, now, guildId, id);
+      "UPDATE confessions SET number = ?, status = 'posted', posted_at = ?, poll_ends_at = CASE WHEN poll_hours > 0 THEN ? + poll_hours * 3600000 ELSE NULL END WHERE guild_id = ? AND id = ?",
+    ).run(counter, now, now, guildId, id);
     db.exec('COMMIT');
     return counter;
   } catch (err) {
@@ -472,10 +493,10 @@ export function assignNumber(guildId, id) {
   }
 }
 
-/** Posting an approved submission failed: put it back in the queue and give the number back. */
-export function revertAssign(guildId, id, number) {
+/** Posting a waiting submission failed: put it back (`status`) and give the number back. */
+export function revertAssign(guildId, id, number, status = 'pending') {
   db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
-  db.prepare("UPDATE confessions SET number = 0, status = 'pending', poll_ends_at = NULL WHERE guild_id = ? AND id = ?").run(guildId, id);
+  db.prepare('UPDATE confessions SET number = 0, status = ?, posted_at = NULL, poll_ends_at = NULL WHERE guild_id = ? AND id = ?').run(status, guildId, id);
 }
 
 /** Undo a createConfession whose Discord post failed. Call only while holding the guild lock. */
@@ -790,7 +811,7 @@ export function topLikedSince(guildId, since) {
                 COALESCE(SUM(r.kind = 'up'), 0)   AS ups,
                 COALESCE(SUM(r.kind = 'down'), 0) AS downs
            FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
-          WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
+          WHERE c.guild_id = ? AND c.status = 'posted' AND COALESCE(c.posted_at, c.created_at) >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
             AND c.thread_root IS NULL
           GROUP BY c.id
          HAVING ups > 0
@@ -941,9 +962,9 @@ function page(where, args, order, limit, offset) {
   return { rows, total: n };
 }
 
-/** Posts waiting for a moderator (pending approval or hidden after reports), oldest first. */
+/** Posts waiting for approval, hidden after reports, or saved until posting resumes. Oldest first. */
 export function listQueue(guildId, limit, offset = 0) {
-  return page("guild_id = ? AND status IN ('pending', 'hidden')", [guildId], 'ASC', limit, offset);
+  return page("guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')", [guildId], 'ASC', limit, offset);
 }
 
 /** `filters` = { text, tag, status, since }, all optional. Newest first. Never filters by author. */
@@ -978,7 +999,7 @@ export function guildStats(guildId, since) {
     `SELECT COALESCE(SUM(reply_to IS NOT NULL), 0) AS replies, COALESCE(SUM(is_poll), 0) AS polls, COALESCE(SUM(has_image), 0) AS images ${recent}`,
     guildId, since,
   );
-  const waiting = one("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM confessions WHERE guild_id = ? AND status IN ('pending', 'hidden')", guildId);
+  const waiting = one("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM confessions WHERE guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')", guildId);
   return {
     ...totals,
     byStatus: new Map(db.prepare(`SELECT status, COUNT(*) AS n ${recent} GROUP BY status`).all(guildId, since).map((r) => [r.status, r.n])),
@@ -992,4 +1013,32 @@ export function guildStats(guildId, since) {
     waiting: waiting.n,
     oldestWaiting: waiting.oldest,
   };
+}
+
+/* ---------- submissions saved while posting is on hold ---------- */
+
+/** This person's submissions that are not up yet (saved for later, or waiting for approval). */
+export function countWaiting(guildId, userId) {
+  return db
+    .prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND author_key = ? AND status IN ('pending', 'scheduled')")
+    .get(guildId, keyOf(guildId, userId)).n;
+}
+
+export function countScheduled(guildId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'scheduled'").get(guildId).n;
+}
+
+/** Saved submissions in the order they were sent. */
+export function listScheduled(guildId) {
+  return db.prepare("SELECT * FROM confessions WHERE guild_id = ? AND status = 'scheduled' ORDER BY id").all(guildId);
+}
+
+export function guildsWithScheduled() {
+  return db.prepare("SELECT DISTINCT guild_id FROM confessions WHERE status = 'scheduled'").all().map((r) => r.guild_id);
+}
+
+/** Count a refused attempt to post a saved submission. Returns how many there have been. */
+export function addReleaseTry(id) {
+  db.prepare('UPDATE confessions SET release_tries = release_tries + 1 WHERE id = ?').run(id);
+  return db.prepare('SELECT release_tries AS n FROM confessions WHERE id = ?').get(id).n;
 }
