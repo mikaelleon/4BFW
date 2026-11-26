@@ -57,6 +57,8 @@ function howToPage({ cfg }) {
     '> - Press Reply under any post to respond to it.',
     '> - Or type its number, like `#012`, and it turns into a link',
     '> - The author gets a DM to notify that someone replied to their post',
+    '> - With reply threads, you keep one alias (like Anon 2) inside a thread, so your replies there can be told apart from others’',
+    '> - Replying to your own post, you can choose to show as **OP**. It is off unless you pick it',
     '',
     '> **5. Reacting and voting:**',
     '> - Tap 👍 👎 under a post. One reaction each, tap again to take it back.',

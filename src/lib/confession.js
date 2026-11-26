@@ -20,6 +20,9 @@ import { imageHelp, uploadLimit } from './image.js';
 import { checkFilters } from './filter.js';
 import { DUPLICATE_MESSAGE, checkDailyCap, checkEligibility, isDuplicate } from './gates.js';
 import { removeFeatured } from './featured.js';
+import { closedNotice } from './hours.js';
+import { userKey } from './identity.js';
+import { closeThread, ensureThread, openChannel } from './threads.js';
 import { MAX_CW_LEN, postFiles, renderBody } from './render.js';
 import { TAGS, getTag, tagText } from './tags.js';
 
@@ -84,6 +87,12 @@ export function confessionEmbed(number, content, color, imageName = PAD_NAME, ta
   return embed;
 }
 
+/** Heading of a stored post: thread replies lead with the alias, the post author's channel replies end with "OP". */
+export function postTitle(row) {
+  if (row.thread_root && row.alias) return `${row.alias} · ${anonRef(row.number)}`;
+  return row.alias ? `${anonTitle(row.number)} · ${row.alias}` : anonTitle(row.number);
+}
+
 /** The whole public post (embed, files, buttons) for a stored row. Used to post, restore and re-render. */
 export function buildPost(row, image) {
   const { files, imageName } = postFiles(image, row.cw);
@@ -93,6 +102,7 @@ export function buildPost(row, image) {
     closed: Boolean(row.poll_closed_at),
     options: pollOptions && !isYesNo(pollOptions) ? pollOptions : null, // listed in the embed; the buttons just carry numbers
   });
+  embed.setTitle(postTitle(row));
   return { embeds: [embed], files, components: postComponents(row), allowedMentions: { parse: [] } };
 }
 
@@ -220,7 +230,7 @@ function stickyPayload() {
   };
 }
 
-/** `reply` = { messageId, number } when answering a specific confession. */
+/** `reply` = { messageId, number, own } when answering a specific confession; `own` = it is the clicker's own post. */
 export function confessModal(reply = null) {
   const modal = new ModalBuilder()
     .setCustomId(reply ? `${MODAL_ID}:${reply.messageId}` : MODAL_ID)
@@ -256,6 +266,23 @@ export function confessModal(reply = null) {
       .setDescription('Hides your text behind a spoiler, e.g. "violence" or "spoilers".')
       .setTextInputComponent(new TextInputBuilder().setCustomId('cw').setStyle(TextInputStyle.Short).setMaxLength(MAX_CW_LEN).setRequired(false)),
   );
+  if (reply?.own) {
+    // Only the author of the post sees this. Off unless chosen: the tag links this reply to their post.
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Reply as OP? (optional)')
+        .setDescription('OP shows everyone that the author of this post wrote the reply.')
+        .setStringSelectMenuComponent(
+          new StringSelectMenuBuilder()
+            .setCustomId('op')
+            .setPlaceholder('No, stay unmarked')
+            .setRequired(false)
+            .setMinValues(0)
+            .setMaxValues(1)
+            .addOptions({ label: 'Yes, mark me as OP', value: 'yes' }, { label: 'No, stay unmarked', value: 'no' }),
+        ),
+    );
+  }
   if (!reply) {
     // Picking a type turns the submission into a poll: the text above is the question. (A modal holds at most 5 inputs, so
     // "Multiple choice" asks for its options in a second pop-up, see optionsModal.)
@@ -335,9 +362,13 @@ export const approvalRow = (id) =>
     new ButtonBuilder().setCustomId(`${APPROVAL_PREFIX}:no:${id}`).setLabel('Reject').setStyle(ButtonStyle.Danger),
   );
 
-/** Extra mod-log fields describing a post: content warning. (Topic and poll marker are added by modLog; poll options are not shown.) */
+/** Extra mod-log fields describing a post: content warning and thread. (Topic and poll marker are added by modLog.) */
 function logFields(row) {
-  return row.cw ? [{ name: 'Content warning', value: row.cw, inline: true }] : [];
+  const root = row.thread_root ? db.getConfession(row.guild_id, row.thread_root) : null;
+  return [
+    ...(root ? [{ name: 'Thread reply under', value: anonRef(root.number), inline: true }] : []),
+    ...(row.cw ? [{ name: 'Content warning', value: row.cw, inline: true }] : []),
+  ];
 }
 
 /**
@@ -349,14 +380,33 @@ async function publish(guild, row) {
   const me = guild.members.me ?? (await guild.members.fetchMe());
   const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
   const usable = (c) => c && c.permissionsFor(me)?.has(needed);
-  // If the topic's channel is gone or off-limits, use the main channel.
-  const topicId = row.tag ? db.getTagChannel(guild.id, row.tag) : null;
-  let channel = topicId ? await guild.channels.fetch(topicId).catch(() => null) : null;
-  if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
-  if (!usable(channel)) return { error: 'I cannot post in the submissions channel right now. Tell an admin.' };
+  let channel;
+  let root = null;
+  if (row.thread_root) {
+    root = db.getConfession(guild.id, row.thread_root);
+    if (!root || root.status !== 'posted') return { error: 'That submission is no longer available to reply to.' };
+    const opened = await ensureThread(guild, root);
+    if (opened.error) return opened;
+    channel = opened.thread;
+    if (channel.locked) return { error: 'Replies are closed on that submission.' };
+    if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads, PermissionFlagsBits.EmbedLinks])) {
+      return { error: 'I cannot post in that thread right now. Tell an admin.' };
+    }
+  } else {
+    // If the topic's channel is gone or off-limits, use the main channel.
+    const topicId = row.tag ? db.getTagChannel(guild.id, row.tag) : null;
+    channel = topicId ? await guild.channels.fetch(topicId).catch(() => null) : null;
+    if (!usable(channel)) channel = await guild.channels.fetch(cfg.channel_id).catch(() => null);
+    if (!usable(channel)) return { error: 'I cannot post in the submissions channel right now. Tell an admin.' };
+  }
 
   const image = row.has_image ? db.getConfessionImage(row.id) : null;
   const { body, targets } = linkReferences(guild.id, row.content, row.reply_to);
+  // The author of the thread's post hears about every reply in it, also replies to other replies.
+  if (root && !targets.some((t) => t.id === root.id)) targets.push(root);
+  // Alias is fixed when the reply goes up: "OP" when the post's author chose it, else their number in this thread.
+  if (row.op_tag) db.setAlias(row.id, 'OP');
+  else if (root) db.setAlias(row.id, `Anon ${db.threadAlias(root.id, row.author_key)}`);
   // Tagged posts get a shade of their topic's color, untagged ones a random gray.
   const topic = getTag(row.tag);
   const color = topic ? topicShade(topic.color, `${guild.id}:${topic.key}`) : randomSubmissionColor(guild.id);
@@ -389,13 +439,17 @@ async function afterPublish(guild, row, msg, targets, { title, actor } = {}) {
     controls: true,
     fields: logFields(row),
   }).catch(() => {});
-  await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
+  if (!row.thread_root) {
+    // A thread under every new post when the server wants them. A failure only costs the thread, not the post.
+    if (db.getGuild(guild.id)?.auto_thread) await ensureThread(guild, row);
+    await postSticky(guild).catch((err) => console.error('Failed to refresh sticky:', err));
+  }
   // Fire and forget: DMs can be slow or closed, and must not delay the reply to the sender.
   notifyReplies(guild.client, guild, targets, row.author_id, row.content, msg.url).catch((err) => console.error('Reply notify failed:', err));
 }
 
 /**
- * Why this person may not post here right now (not a member, banned, too new, cooldown, daily cap), or null. Also asked
+ * Why this person may not post here right now (not a member, banned, closed, too new, cooldown, daily cap), or null. Also asked
  * before an image is downloaded, so someone who cannot post cannot make the bot fetch and hold files.
  */
 export async function whyCannotPost(guild, userId) {
@@ -404,6 +458,9 @@ export async function whyCannotPost(guild, userId) {
   const member = await guild.members.fetch(userId).catch(() => null);
   if (!member) return 'You are not a member of that server.';
   if (db.getBan(guild.id, userId)) return 'You are banned from posting in this server.';
+
+  const closed = closedNotice(cfg);
+  if (closed) return closed;
 
   const tooNew = checkEligibility(member, cfg);
   if (tooNew) return tooNew;
@@ -464,8 +521,15 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     }
 
     const pending = Boolean(cfg.approval_mode) || holdReason !== null;
+    // A reply goes into a thread when the server uses them, or when it answers something already inside one.
+    const target = replyToMessageId ? db.getConfessionByMessage(guild.id, replyToMessageId) : null;
+    const threadRoot = target ? (target.thread_root ?? (cfg.auto_thread ? target.id : null)) : null;
+    // "OP" only ever means the author of that post (the thread's post, or the one replied to), and only when asked for.
+    const opOf = threadRoot ? db.getConfession(guild.id, threadRoot) : target;
+    const opTag = Boolean(extras.showOp) && opOf?.author_key === userKey(guild.id, userId);
+
     const created = db.createConfession(guild.id, userId, content, Boolean(image), {
-      tag, pollOptions, pollHours, cw, replyTo: replyToMessageId, pending, holdReason,
+      tag, pollOptions, pollHours, cw, replyTo: replyToMessageId, pending, holdReason, threadRoot, opTag,
     });
     if (image) db.setConfessionImage(created.id, image.name, image.buffer);
     const row = db.getConfession(guild.id, created.id);
@@ -492,7 +556,7 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
       return fail(res.error);
     }
     await afterPublish(guild, res.row, res.msg, res.targets);
-    return { ok: true, id: created.id, subId: created.subId, number: created.number, url: res.msg.url };
+    return { ok: true, id: created.id, subId: created.subId, number: created.number, url: res.msg.url, alias: res.row.alias };
   });
 }
 
@@ -521,7 +585,7 @@ export function approveSubmission(guild, row, actor) {
       fresh.author_id,
       notice(`Your submission was approved in ${guild.name}`, `It is now live as **${anonTitle(number)}**.\n[View it](${res.msg.url})`),
     );
-    return { ok: true, number, url: res.msg.url };
+    return { ok: true, number, url: res.msg.url, alias: res.row.alias };
   });
 }
 
@@ -559,7 +623,7 @@ export const resetCounterSafely = (guild, startAt) => withLock(guild.id, async (
 
 export async function fetchPostMessage(guild, row) {
   if (!row.channel_id || !row.message_id) return null;
-  const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+  const channel = await openChannel(guild, row.channel_id);
   return channel?.messages.fetch(row.message_id).catch(() => null) ?? null;
 }
 
@@ -601,9 +665,10 @@ export async function restoreConfessionMessage(guild, row) {
 
 export async function deleteConfessionMessage(guild, row) {
   if (row.channel_id && row.message_id) {
-    const channel = await guild.channels.fetch(row.channel_id).catch(() => null);
+    const channel = await openChannel(guild, row.channel_id);
     await channel?.messages.delete(row.message_id).catch(() => {});
   }
   db.markConfession(guild.id, row.id, 'deleted');
+  await closeThread(guild, db.getConfession(guild.id, row.id));
   await removeFeatured(guild, row).catch(() => {});
 }

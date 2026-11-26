@@ -316,6 +316,36 @@ if (schemaVersion < 14) {
   schemaVersion = 14;
 }
 
+// v15: reply threads with per-thread aliases and the optional OP tag, plus pausing and quiet hours.
+if (schemaVersion < 15) {
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      ALTER TABLE guilds ADD COLUMN auto_thread  INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE guilds ADD COLUMN paused_until INTEGER;
+      ALTER TABLE guilds ADD COLUMN pause_reason TEXT;
+      ALTER TABLE guilds ADD COLUMN quiet_start  INTEGER;
+      ALTER TABLE guilds ADD COLUMN quiet_end    INTEGER;
+      ALTER TABLE confessions ADD COLUMN thread_id   TEXT;
+      ALTER TABLE confessions ADD COLUMN thread_root INTEGER;
+      ALTER TABLE confessions ADD COLUMN op_tag      INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE confessions ADD COLUMN alias       TEXT;
+      CREATE TABLE IF NOT EXISTS thread_aliases (
+        root_id  INTEGER NOT NULL,
+        user_key TEXT NOT NULL,
+        alias    INTEGER NOT NULL,
+        PRIMARY KEY (root_id, user_key)
+      );
+      PRAGMA user_version = 15;
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  schemaVersion = 15;
+}
+
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
 db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 {
@@ -361,7 +391,8 @@ const GUILD_FIELDS = new Set([
   'online_role_id', 'online_notified_at', 'report_limit', 'warn_expiry_days', 'highlight_channel_id', 'highlight_period',
   'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days', 'approval_mode', 'filter_action',
   'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold', 'min_join_days',
-  'min_account_days', 'daily_cap', 'dup_hours', 'owner_pin',
+  'min_account_days', 'daily_cap', 'dup_hours', 'owner_pin', 'auto_thread', 'paused_until', 'pause_reason',
+  'quiet_start', 'quiet_end',
 ]);
 
 export function getGuild(guildId) {
@@ -384,7 +415,7 @@ export function configuredGuilds() {
 /* ---------- confessions ---------- */
 
 /**
- * `extras` = { tag, pollOptions, pollHours, replyTo, cw, pending, holdReason } (all optional).
+ * `extras` = { tag, pollOptions, pollHours, replyTo, cw, pending, holdReason, threadRoot, opTag } (all optional).
  * `pending` posts wait for a moderator: no public number yet (see assignNumber) and no poll end time yet.
  * Poll options are stored together with the confession.
  */
@@ -403,13 +434,14 @@ export function createConfession(guildId, authorId, content, hasImage = false, e
     const { lastInsertRowid } = db
       .prepare(
         `INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id,
-                                  status, reply_to, cw, poll_hours, poll_ends_at, hold_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                  status, reply_to, cw, poll_hours, poll_ends_at, hold_reason, thread_root, op_tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, now, extras.tag ?? null, isPoll, subId,
         extras.pending ? 'pending' : 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
         !extras.pending && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
+        extras.threadRoot ?? null, extras.opTag ? 1 : 0,
       );
     extras.pollOptions?.forEach((label, idx) =>
       db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
@@ -759,6 +791,7 @@ export function topLikedSince(guildId, since) {
                 COALESCE(SUM(r.kind = 'down'), 0) AS downs
            FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
           WHERE c.guild_id = ? AND c.status = 'posted' AND c.created_at >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
+            AND c.thread_root IS NULL
           GROUP BY c.id
          HAVING ups > 0
           ORDER BY ups DESC, downs ASC, c.id ASC
@@ -879,4 +912,84 @@ export function listDuePolls(now = Date.now()) {
 
 export function setFeatured(id, channelId, messageId) {
   db.prepare('UPDATE confessions SET featured_channel_id = ?, featured_message_id = ? WHERE id = ?').run(channelId, messageId, id);
+}
+
+/* ---------- reply threads ---------- */
+
+export function setThread(id, threadId) {
+  db.prepare('UPDATE confessions SET thread_id = ? WHERE id = ?').run(threadId, id);
+}
+
+export function setAlias(id, alias) {
+  db.prepare('UPDATE confessions SET alias = ? WHERE id = ?').run(alias, id);
+}
+
+/** This person's number in the thread under post `rootId` (1, 2, 3... in order of first reply). `userKey` is their key. */
+export function threadAlias(rootId, userKey) {
+  const found = db.prepare('SELECT alias FROM thread_aliases WHERE root_id = ? AND user_key = ?').get(rootId, userKey);
+  if (found) return found.alias;
+  const { next } = db.prepare('SELECT COALESCE(MAX(alias), 0) + 1 AS next FROM thread_aliases WHERE root_id = ?').get(rootId);
+  db.prepare('INSERT INTO thread_aliases (root_id, user_key, alias) VALUES (?, ?, ?)').run(rootId, userKey, next);
+  return next;
+}
+
+/* ---------- moderator views: queue, search, stats ---------- */
+
+function page(where, args, order, limit, offset) {
+  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM confessions WHERE ${where}`).get(...args);
+  const rows = db.prepare(`SELECT * FROM confessions WHERE ${where} ORDER BY id ${order} LIMIT ? OFFSET ?`).all(...args, limit, offset);
+  return { rows, total: n };
+}
+
+/** Posts waiting for a moderator (pending approval or hidden after reports), oldest first. */
+export function listQueue(guildId, limit, offset = 0) {
+  return page("guild_id = ? AND status IN ('pending', 'hidden')", [guildId], 'ASC', limit, offset);
+}
+
+/** `filters` = { text, tag, status, since }, all optional. Newest first. Never filters by author. */
+export function searchConfessions(guildId, { text, tag, status, since } = {}, limit = 10, offset = 0) {
+  const where = ['guild_id = ?'];
+  const args = [guildId];
+  if (text) {
+    where.push("(content LIKE ? ESCAPE '\\' OR cw LIKE ? ESCAPE '\\')");
+    const like = `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+    args.push(like, like);
+  }
+  if (tag) {
+    where.push('tag = ?');
+    args.push(tag);
+  }
+  if (status) {
+    where.push('status = ?');
+    args.push(status);
+  }
+  if (since) {
+    where.push('created_at >= ?');
+    args.push(since);
+  }
+  return page(where.join(' AND '), args, 'DESC', limit, offset);
+}
+
+/** Server-wide totals for posts created since `since`, plus what is waiting right now. */
+export function guildStats(guildId, since) {
+  const one = (sql, ...args) => db.prepare(sql).get(...args);
+  const recent = 'FROM confessions WHERE guild_id = ? AND created_at >= ?';
+  const totals = one(
+    `SELECT COALESCE(SUM(reply_to IS NOT NULL), 0) AS replies, COALESCE(SUM(is_poll), 0) AS polls, COALESCE(SUM(has_image), 0) AS images ${recent}`,
+    guildId, since,
+  );
+  const waiting = one("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM confessions WHERE guild_id = ? AND status IN ('pending', 'hidden')", guildId);
+  return {
+    ...totals,
+    byStatus: new Map(db.prepare(`SELECT status, COUNT(*) AS n ${recent} GROUP BY status`).all(guildId, since).map((r) => [r.status, r.n])),
+    topics: db.prepare(`SELECT tag, COUNT(*) AS n ${recent} GROUP BY tag ORDER BY n DESC, tag LIMIT 5`).all(guildId, since),
+    reports: one(
+      'SELECT COUNT(*) AS n FROM reports r JOIN confessions c ON c.id = r.confession_id WHERE c.guild_id = ? AND r.created_at >= ?',
+      guildId, since,
+    ).n,
+    warnings: one('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND created_at >= ?', guildId, since).n,
+    activeBans: one('SELECT COUNT(*) AS n FROM bans WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > ?)', guildId, Date.now()).n,
+    waiting: waiting.n,
+    oldestWaiting: waiting.oldest,
+  };
 }

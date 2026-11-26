@@ -6,6 +6,8 @@ import { COLOR } from './format.js';
 import { uploadLimit } from './image.js';
 import { usesTokenSecret } from './identity.js';
 import { getTag } from './tags.js';
+import { closedNotice } from './hours.js';
+import { THREAD_PERMS } from './threads.js';
 
 const OK = '✅';
 const WARN = '⚠️';
@@ -74,6 +76,15 @@ export async function runDoctor(guild) {
     sections.Channels.push(...(await channelCheck(guild, me, route.channel_id, `Topic channel (${name})`, POST_PERMS, 'Run `/setup tagchannel` again.')).lines);
   }
 
+  if (cfg.auto_thread) {
+    const ids = [cfg.channel_id, ...db.listTagChannels(guild.id).map((r) => r.channel_id)].filter(Boolean);
+    for (const id of new Set(ids)) {
+      const channel = await guild.channels.fetch(id).catch(() => null);
+      const missing = channel ? missingNames(channel, me, THREAD_PERMS) : [];
+      if (missing.length) sections.Channels.push(line(BAD, `Reply threads <#${id}>: I am missing **${missing.join(', ')}**.`));
+    }
+  }
+
   /* ---- roles ---- */
   for (const [label, id, fix] of [
     ['Moderator role', cfg.mod_role_id, '`/setup modrole`'],
@@ -102,6 +113,8 @@ export async function runDoctor(guild) {
   if (cfg.report_limit > 0 && !cfg.log_channel_id) {
     sections.Settings.push(line(WARN, 'Posts auto-hide after reports but there is no mod log to review them in.'));
   }
+  const closed = closedNotice(cfg);
+  if (closed) sections.Settings.push(line(INFO, closed.replace(/\n/g, ' ')));
   if (cfg.cooldown === 0) sections.Settings.push(line(WARN, 'Cooldown is 0: people can post as fast as they like.'));
   const pending = db.countPending(guild.id);
   if (pending > 0) sections.Settings.push(line(WARN, `${pending} submission${pending === 1 ? ' is' : 's are'} waiting for a moderator in the mod log.`));

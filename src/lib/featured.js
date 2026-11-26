@@ -26,7 +26,7 @@ export async function maybeFeature(guild, row) {
   const cfg = db.getGuild(guild.id);
   if (!cfg?.featured_channel_id) return;
   const fresh = db.getConfession(guild.id, row.id);
-  if (!fresh || fresh.status !== 'posted' || fresh.purged_at) return;
+  if (!fresh || fresh.status !== 'posted' || fresh.purged_at || fresh.thread_root) return; // thread replies stay in their thread
 
   const counts = db.reactionCounts(fresh.id);
   const image = fresh.has_image ? db.getConfessionImage(fresh.id) : null;

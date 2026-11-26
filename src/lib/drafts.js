@@ -23,7 +23,8 @@ export function resultText(res, guild, { inGuildName = false, url = false } = {}
   if (!res.ok) return res.error;
   const where = inGuildName ? ` in **${guild.name}**` : '';
   if (res.pending) return `Your submission${where} was sent to the moderators for review. It goes up once it is approved.`;
-  return `Posted as **${anonTitle(res.number)}**${where}.${url ? `\n${res.url}` : ''}`;
+  const as = res.alias ? ` (you appear as **${res.alias}**)` : '';
+  return `Posted as **${anonTitle(res.number)}**${where}${as}.${url ? `\n${res.url}` : ''}`;
 }
 
 function previewPayload(guild, token, d) {

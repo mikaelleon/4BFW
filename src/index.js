@@ -40,6 +40,8 @@ import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } fr
 import { prefix } from './lib/format.js';
 import { BUSY_MESSAGE, claimUpload, downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { holdsImages, keep } from './lib/held.js';
+import { closedNotice } from './lib/hours.js';
+import { userKey } from './lib/identity.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
 import { handleClosePollButton, handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
@@ -351,6 +353,8 @@ async function routeInteraction(interaction) {
     if (interaction.guildId && db.getBan(interaction.guildId, interaction.user.id)) {
       return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
     }
+    const closed = interaction.guildId && closedNotice(db.getGuild(interaction.guildId));
+    if (closed) return interaction.reply({ content: closed, flags: EPHEMERAL });
     return interaction.showModal(confessModal());
   }
 
@@ -363,7 +367,12 @@ async function routeInteraction(interaction) {
     if (!target || target.status !== 'posted') {
       return interaction.reply({ content: 'That submission is no longer available to reply to.', flags: EPHEMERAL });
     }
-    return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
+    const closed = closedNotice(db.getGuild(interaction.guildId));
+    if (closed) return interaction.reply({ content: closed, flags: EPHEMERAL });
+    // The OP choice is offered only to the author of the post (inside a thread: of the post the thread is under).
+    const opOf = target.thread_root ? db.getConfession(interaction.guildId, target.thread_root) : target;
+    const own = opOf?.author_key === userKey(interaction.guildId, interaction.user.id);
+    return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number, own }));
   }
 
   // 👍 👎 and poll-option buttons under a submission.
@@ -425,7 +434,15 @@ async function routeInteraction(interaction) {
         });
       }
       const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
-      const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
+      let showOp = false;
+      if (replyTo) {
+        try {
+          showOp = interaction.fields.getStringSelectValues('op')?.[0] === 'yes';
+        } catch {
+          /* the choice is only in the pop-up of the post's author */
+        }
+      }
+      const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions, showOp });
       return await interaction.editReply(out.preview ?? resultText(out.result, guild));
     } finally {
       release?.();

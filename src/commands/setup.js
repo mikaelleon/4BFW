@@ -12,6 +12,8 @@ import { resolveGuild } from '../lib/context.js';
 import { COLOR, anonRef } from '../lib/format.js';
 import { postComponents, refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
 import { runDoctor } from '../lib/doctor.js';
+import { clockText, hasQuietHours, parseClock } from '../lib/hours.js';
+import { THREAD_PERMS } from '../lib/threads.js';
 import { ensureOwnerPin, hasPin } from '../lib/owner-pin.js';
 import { highlightTimers } from '../lib/highlights.js';
 import { tagChoices, tagText } from '../lib/tags.js';
@@ -175,6 +177,24 @@ export default {
           .setName('refreshposts')
           .setDescription('Give older posts the current buttons (Report, reactions, poll)')
           .addIntegerOption((o) => o.setName('count').setDescription('How many of the newest posts (default 50)').setMinValue(1).setMaxValue(200)),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        s
+          .setName('threads')
+          .setDescription('Open a reply thread under each post; replies stay anonymous inside it')
+          .addBooleanOption((o) => o.setName('enabled').setDescription('On or off').setRequired(true)),
+      ),
+    )
+    .addSubcommand((s) =>
+      serverOpt(
+        s
+          .setName('quiethours')
+          .setDescription('Close submissions at the same time every day')
+          .addStringOption((o) => o.setName('start').setDescription('Closes at, 24-hour clock, e.g. 23:00').setMaxLength(5))
+          .addStringOption((o) => o.setName('end').setDescription('Reopens at, e.g. 05:00').setMaxLength(5))
+          .addBooleanOption((o) => o.setName('off').setDescription('Turn quiet hours off')),
       ),
     )
     .addSubcommand((s) => serverOpt(s.setName('doctor').setDescription('Check channels, permissions and settings for problems')))
@@ -431,6 +451,43 @@ export default {
       return interaction.editReply('Button message reposted.');
     }
 
+    if (sub === 'threads') {
+      if (!interaction.options.getBoolean('enabled', true)) {
+        db.updateGuild(guild.id, { auto_thread: 0 });
+        return interaction.editReply('Reply threads are off: new replies go in the channel. Existing threads stay, and replies inside them still work.');
+      }
+      if (!cfg?.channel_id) return interaction.editReply('Run `/setup channel` first.');
+      const me = guild.members.me ?? (await guild.members.fetchMe());
+      const ids = [cfg.channel_id, ...db.listTagChannels(guild.id).map((r) => r.channel_id)];
+      const lacking = [];
+      for (const id of new Set(ids)) {
+        const channel = await guild.channels.fetch(id).catch(() => null);
+        if (!channel?.permissionsFor(me)?.has(THREAD_PERMS)) lacking.push(`<#${id}>`);
+      }
+      if (lacking.length) {
+        return interaction.editReply(`I need **Create Public Threads** and **Send Messages in Threads** in ${lacking.join(', ')}. Nothing was changed.`);
+      }
+      db.updateGuild(guild.id, { auto_thread: 1 });
+      return interaction.editReply(
+        'Reply threads are **on**. Each new post gets a thread, and **Reply** posts into it under an alias that stays the same in that thread. Older posts get a thread at their first reply.',
+      );
+    }
+
+    if (sub === 'quiethours') {
+      if (interaction.options.getBoolean('off')) {
+        db.updateGuild(guild.id, { quiet_start: null, quiet_end: null });
+        return interaction.editReply('Quiet hours are off.');
+      }
+      const start = parseClock(interaction.options.getString('start'));
+      const end = parseClock(interaction.options.getString('end'));
+      if (start === null || end === null) return interaction.editReply('Give both `start` and `end` as 24-hour times like `23:00` and `05:00`, or pass `off: true`.');
+      if (start === end) return interaction.editReply('`start` and `end` must differ. To close submissions for now, use `/mod pause`.');
+      db.updateGuild(guild.id, { quiet_start: start, quiet_end: end });
+      return interaction.editReply(
+        `Submissions and replies close every day from **${clockText(start)}** to **${clockText(end)}** (${process.env.TIMEZONE || 'Asia/Manila'}).`,
+      );
+    }
+
     if (sub === 'doctor') {
       return interaction.editReply({ embeds: [await runDoctor(guild)], allowedMentions: { parse: [] } });
     }
@@ -474,6 +531,10 @@ export default {
         { name: 'Data retention', value: c.retention_days > 0 ? `${c.retention_days} days` : 'Keep forever', inline: true },
         { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },
         { name: 'Confession of the day / week', value: highlight, inline: true },
+        {
+          name: 'Threads · quiet hours',
+          value: `Reply threads ${c.auto_thread ? 'on' : 'off'} · ${hasQuietHours(c) ? `quiet ${clockText(c.quiet_start)} to ${clockText(c.quiet_end)}` : 'no quiet hours'}`,
+        },
         { name: 'Topic channels', value: topicValue },
         { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },
         { name: 'Owner PIN', value: hasPin(guild.id) ? 'Set' : 'Not set (owner: run /ownerpin)', inline: true },

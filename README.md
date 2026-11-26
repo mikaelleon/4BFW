@@ -6,8 +6,8 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 
 1. Discord Developer Portal -> New Application -> Bot. Copy the **token**.
 2. Bot tab -> enable **Server Members Intent** (needed for `/announce`, welcome DMs, and membership checks).
-3. Invite the bot (replace `YOUR_CLIENT_ID`). The permission set covers viewing, sending, embeds, files, and message history:
-   `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot%20applications.commands&permissions=117760`
+3. Invite the bot (replace `YOUR_CLIENT_ID`). The permission set covers viewing, sending, embeds, files, message history, and reply threads:
+   `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot%20applications.commands&permissions=309237763072`
 4. `copy .env.example .env`, then fill `DISCORD_TOKEN` and `CLIENT_ID`.
 5. `npm install`, then `npm run deploy` (registers slash commands), then `npm start`.
    - Leave `DEV_GUILD_ID` empty for global commands (required for DM use, up to ~1h to propagate).
@@ -44,6 +44,16 @@ Under each post: **Reply**, **Report**, and 👍 👎 ❤️ (one reaction per p
 
 Topics (also `#key` in DMs): Confessions, Crush / Love, Rants & Vents, Shoutouts, Campus Life, Academics, Questions, Lost & Found, Events, Org & Department, Memes, Random, Suggestions, Mental Health, Open Letters. `/setup tagchannel` sends one topic to its own channel. The button stays in the main channel.
 
+## Reply threads
+
+Off by default. With `/setup threads enabled:true` every new post gets a thread, and **Reply** posts into it through the bot. Older posts get a thread at their first reply. The bot needs **Create Public Threads** and **Send Messages in Threads** (an existing invite may lack them).
+
+- A person keeps one alias per thread (`Anon 1`, `Anon 2`…, numbered by first reply). Aliases differ between threads. Anyone can therefore tell which replies in one thread came from the same person.
+- Only the author of the post is offered **Reply as OP**, off unless chosen. Without threads, the same choice adds `OP` to a channel reply.
+- Each reply is a normal submission: it takes the next public number and a Submission ID, passes the filter, cooldown, caps and approval queue, and has Report and 👍 👎. It is not featured or highlighted.
+- Deleting a post archives its thread and refuses new replies; replies already there stay until deleted one by one. Locking a thread in Discord stops bot replies too.
+- People can still type in a thread under their own name. Deny **Send Messages in Threads** for @everyone to allow only anonymous replies.
+
 ## Confession number vs Submission ID
 
 | | Public number | Submission ID |
@@ -76,6 +86,8 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 - `featured` — copy a post into another channel once it reaches a 👍 threshold (default 5). The copy's counts follow the original, and the copy is removed if the original is deleted or hidden
 - `refreshposts [count]` — put the current buttons on the newest posts (default 50)
 - `refresh` — repost the button message
+- `threads enabled:true|false` — a reply thread under each new post (see Reply threads)
+- `quiethours start:23:00 end:05:00` — close submissions and replies at those times every day, in `TIMEZONE` (`off:true` to stop)
 - `view` — current settings
 - `doctor` — channels, permissions, deleted roles, settings that contradict each other, pending posts, and the ID hash secret
 
@@ -89,6 +101,13 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 - `delete`, `warn` (optional `delete`), `ban` (optional `duration` like `30m`, `12h`, `7d`, `2w`; default also deletes the post), `unban` (clears warnings by default)
 - `info`, `history` (that author's posts, warnings, and notes), `note`, `restore` (put back a post that reports auto-hid, and dismiss its reports)
+
+Not tied to one submission:
+
+- `pause [duration] [reason]` and `resume` — stop new submissions and replies for a while. Posts already waiting can still be approved
+- `queue` — posts waiting for approval or hidden after reports, oldest first
+- `stats [days]` — server totals: posts, replies, topics, reports, warnings, bans, queue
+- `search [text] [topic] [status] [days]` — find submissions. There is no search by person
 
 The warn limit (default 3) auto-bans. Warnings older than `warn_expiry_days` (`0` = never) stop counting. Timed bans lift themselves; the user and the mod log are told.
 
