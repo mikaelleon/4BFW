@@ -200,8 +200,13 @@ async function handleDm(message, catchUp = false) {
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.guildId) return;
-  db.setDmCursor(message.author.id, message.id);
-  await handleDm(message);
+  try {
+    db.setDmCursor(message.author.id, message.id);
+    await handleDm(message);
+  } catch (err) {
+    console.error('DM handling failed:', err);
+    await message.author.send('Something broke on my side and your message may not have been sent. Try again in a moment.').catch(() => {});
+  }
 });
 
 /* ---------- DM catch-up: submissions sent while the bot was offline ---------- */
@@ -252,196 +257,203 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isAutocomplete()) {
-      const cmd = commands.get(interaction.commandName);
-      if (cmd && interaction.options.getFocused(true).name === 'server') await serverAutocomplete(interaction, { admin: cmd.admin, manageOnly: cmd.manageOnly });
-      return;
-    }
-
-    if (interaction.isChatInputCommand() || interaction.isMessageContextMenuCommand()) {
-      await commands.get(interaction.commandName)?.execute(interaction);
-      return;
-    }
-
-    // Moderation buttons under mod-log entries, and the reason pop-up they open.
-    if (interaction.isButton() && interaction.customId.startsWith(`${CONTROL_PREFIX}:`)) {
-      return handleControlButton(interaction);
-    }
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REASON_PREFIX}:`)) {
-      return handleReasonModal(interaction);
-    }
-
-    // Lift / Deny buttons on a ban appeal in the mod log.
-    if (interaction.isButton() && interaction.customId.startsWith(`${BAN_APPEAL_PREFIX}:`)) {
-      return handleBanAppealButton(interaction);
-    }
-
-    // Overturn / Uphold buttons on a warning appeal in the mod log.
-    if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_PREFIX}:`)) {
-      return handleAppealButton(interaction);
-    }
-
-    // /clearwarn pick list and its Dismiss button.
-    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(`${CLEARWARN_PREFIX}:`)) {
-      return handleClearWarnComponent(interaction);
-    }
-
-    // "Appeal" button in a warning / ban DM -> dropdown of what can be appealed -> pop-up with the reason.
-    if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_FORM_PREFIX}:`)) return handleAppealFormButton(interaction);
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${APPEAL_PICK_PREFIX}:`)) return handleAppealPick(interaction);
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPEAL_MODAL_PREFIX}:`)) return handleAppealModal(interaction);
-
-    // "Read the rules" button in a warning, ban or removal DM: opens the guide on its Rules page as a new message.
-    if (interaction.isButton() && interaction.customId.startsWith(`${RULES_PREFIX}:`)) {
-      const guild = client.guilds.cache.get(interaction.customId.split(':')[1]);
-      if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
-      return interaction.reply(guidePayload(guild, RULES_PAGE));
-    }
-
-    // Guide page buttons ("guide:<guildId>:<page>"), in DMs or ephemeral /guide replies.
-    if (interaction.isButton() && interaction.customId.startsWith(`${GUIDE_PREFIX}:`)) {
-      const [, guildId, page] = interaction.customId.split(':');
-      const guild = client.guilds.cache.get(guildId);
-      if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
-      return interaction.update(guidePayload(guild, Number(page)));
-    }
-
-    // "View Guide" button on the sticky: guide shown only to the clicker.
-    if (interaction.isButton() && interaction.customId === GUIDE_BUTTON_ID) {
-      if (!interaction.guild) return interaction.reply({ content: 'Use this button inside a server.', flags: EPHEMERAL });
-      return interaction.reply({ ...guidePayload(interaction.guild, 0), flags: EPHEMERAL });
-    }
-
-    if (interaction.isButton() && interaction.customId === OPEN_BUTTON_ID) {
-      if (interaction.guildId && db.getBan(interaction.guildId, interaction.user.id)) {
-        return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
-      }
-      return interaction.showModal(confessModal());
-    }
-
-    // "Reply" button under a submission: open the modal aimed at that post.
-    if (interaction.isButton() && interaction.customId === REPLY_BUTTON_ID) {
-      if (db.getBan(interaction.guildId, interaction.user.id)) {
-        return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
-      }
-      const target = db.getConfessionByMessage(interaction.guildId, interaction.message.id);
-      if (!target || target.status !== 'posted') {
-        return interaction.reply({ content: 'That submission is no longer available to reply to.', flags: EPHEMERAL });
-      }
-      return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
-    }
-
-    // 👍 👎 and poll-option buttons under a submission.
-    if (interaction.isButton() && interaction.customId.startsWith(`${REACT_PREFIX}:`)) return handleReactionButton(interaction);
-    if (interaction.isButton() && interaction.customId.startsWith(`${VOTE_PREFIX}:`)) return handleVoteButton(interaction);
-
-    // Close poll button, approval queue buttons (and the reject-reason pop-up), preview Post / Cancel.
-    if (interaction.isButton() && interaction.customId === CLOSE_POLL_ID) return handleClosePollButton(interaction);
-    if (interaction.isButton() && interaction.customId.startsWith(`${APPROVAL_PREFIX}:`)) return handleApprovalButton(interaction);
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPROVAL_REASON_PREFIX}:`)) return handleApprovalModal(interaction);
-    if (interaction.isButton() && interaction.customId.startsWith(`${DRAFT_PREFIX}:`)) return handleDraftButton(interaction);
-
-    // "Report" button under a submission, and its reason pop-up.
-    if (interaction.isButton() && interaction.customId === REPORT_BUTTON_ID) return handleReportButton(interaction);
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REPORT_MODAL_PREFIX}:`)) return handleReportModal(interaction);
-
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_ID)) {
-      await interaction.deferReply({ flags: EPHEMERAL });
-      const replyTo = interaction.customId.split(':')[2] ?? null; // "confess:modal:<messageId>"
-      const guild = interaction.guild ?? (await client.guilds.fetch(interaction.guildId));
-      let image = null;
-      const upload = interaction.fields.getUploadedFiles('image')?.first();
-      if (upload) {
-        const prepared = await prepareImage(upload, uploadLimit(guild));
-        if (prepared.error) return interaction.editReply(prepared.error);
-        image = prepared.image;
-      }
-      // Topic is optional; the poll type exists only on new posts (not replies) and turns the post into a poll.
-      const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
-      const text = interaction.fields.getTextInputValue('text');
-      const cw = interaction.fields.getTextInputValue('cw');
-      let kind = null;
-      if (!replyTo) {
-        try {
-          kind = interaction.fields.getStringSelectValues('pollkind')?.[0] ?? null;
-        } catch {
-          /* a pop-up opened before this update has no poll type */
-        }
-      }
-      if (kind === 'choice') {
-        // Multiple choice: the options come from a second pop-up. Keep the first step (text, image) for ten minutes.
-        const token = randomUUID().slice(0, 8);
-        pending.set(token, { userId: interaction.user.id, guildId: guild.id, text, image, tag, cw, expires: Date.now() + 10 * 60_000 });
-        return interaction.editReply({
-          content: 'Multiple choice poll: add your options to finish. Nothing is posted until you do.',
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(`${OPTIONS_BUTTON_PREFIX}:${token}`).setLabel('Add options').setStyle(ButtonStyle.Primary),
-            ),
-          ],
-        });
-      }
-      const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
-      const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
-      return interaction.editReply(out.preview ?? resultText(out.result, guild));
-    }
-
-    // Multiple choice, step two: the "Add options" button opens the options pop-up, whose answer finishes the post.
-    if (interaction.isButton() && interaction.customId.startsWith(`${OPTIONS_BUTTON_PREFIX}:`)) {
-      const entry = pending.get(interaction.customId.split(':')[2]);
-      if (!entry || entry.userId !== interaction.user.id) {
-        return interaction.update({ content: 'That request expired. Write your submission again.', components: [] });
-      }
-      return interaction.showModal(optionsModal(interaction.customId.split(':')[2]));
-    }
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${OPTIONS_MODAL_PREFIX}:`)) {
-      const token = interaction.customId.split(':')[2];
-      const entry = pending.get(token);
-      if (!entry || entry.userId !== interaction.user.id) {
-        return interaction.reply({ content: 'That request expired. Write your submission again.', flags: EPHEMERAL });
-      }
-      await interaction.deferReply({ flags: EPHEMERAL });
-      const poll = parsePollOptions(interaction.fields.getTextInputValue('options'));
-      if (poll.error) return interaction.editReply(`${poll.error} Press **Add options** again to retry.`);
-      pending.delete(token);
-      const guild = client.guilds.cache.get(entry.guildId) ?? (await client.guilds.fetch(entry.guildId));
-      const out = await submitOrPreview(guild, entry.userId, entry.text, null, entry.image, { tag: entry.tag, cw: entry.cw, pollOptions: poll.options });
-      return interaction.editReply(out.preview ?? resultText(out.result, guild));
-    }
-
-    // Owner PIN: the pop-up asking for it (/sender, /ownerpin) and the Dismiss button under a sender lookup.
-    if (interaction.isModalSubmit() && interaction.customId.startsWith(`${PIN_MODAL_PREFIX}:`)) return handlePinModal(interaction);
-    if (interaction.isButton() && interaction.customId === PIN_DISMISS_ID) return handlePinDismiss(interaction);
-
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('confess:pick:')) {
-      const token = interaction.customId.split(':')[2];
-      const entry = pending.get(token);
-      if (!entry || entry.userId !== interaction.user.id) {
-        return interaction.update({ content: 'That request expired. Send your submission again.', components: [] });
-      }
-      pending.delete(token);
-      const appealing = entry.appealText !== undefined;
-      await interaction.update({ content: appealing ? 'Sending your appeal...' : 'Posting...', components: [] });
-      const guild = client.guilds.cache.get(interaction.values[0]);
-      if (!guild) return interaction.editReply('I can no longer reach that server.');
-      if (appealing) return interaction.editReply(await submitBanAppeal(guild, interaction.user, entry.appealText));
-      const out = await submitOrPreview(guild, interaction.user.id, entry.text, null, entry.image, entry.extras ?? {});
-      if (out.preview) return interaction.editReply(out.preview);
-      return interaction.editReply(
-        out.result.ok ? `${resultText(out.result, guild, { inGuildName: true })}${entry.note ? `\n${entry.note}` : ''}` : out.result.error,
-      );
-    }
+    await routeInteraction(interaction); // awaited here, so a failure in any handler lands in the catch below
   } catch (err) {
     console.error('Interaction error:', err);
-    const msg = 'Something broke on my side. Try again in a moment.';
+    const payload = { content: 'Something broke on my side. Try again in a moment.', flags: EPHEMERAL };
     try {
-      if (interaction.deferred || interaction.replied) await interaction.editReply({ content: msg, components: [] });
-      else if (interaction.isRepliable()) await interaction.reply({ content: msg, flags: EPHEMERAL });
+      // followUp, never editReply: after deferUpdate an edit would overwrite the post or mod-log entry the button sits on.
+      if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
+      else if (interaction.isRepliable()) await interaction.reply(payload);
     } catch {
       /* interaction already expired */
     }
   }
 });
 
+async function routeInteraction(interaction) {
+  if (interaction.isAutocomplete()) {
+    const cmd = commands.get(interaction.commandName);
+    if (cmd && interaction.options.getFocused(true).name === 'server') await serverAutocomplete(interaction, { admin: cmd.admin, manageOnly: cmd.manageOnly });
+    return;
+  }
+
+  if (interaction.isChatInputCommand() || interaction.isMessageContextMenuCommand()) {
+    await commands.get(interaction.commandName)?.execute(interaction);
+    return;
+  }
+
+  // Moderation buttons under mod-log entries, and the reason pop-up they open.
+  if (interaction.isButton() && interaction.customId.startsWith(`${CONTROL_PREFIX}:`)) {
+    return handleControlButton(interaction);
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REASON_PREFIX}:`)) {
+    return handleReasonModal(interaction);
+  }
+
+  // Lift / Deny buttons on a ban appeal in the mod log.
+  if (interaction.isButton() && interaction.customId.startsWith(`${BAN_APPEAL_PREFIX}:`)) {
+    return handleBanAppealButton(interaction);
+  }
+
+  // Overturn / Uphold buttons on a warning appeal in the mod log.
+  if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_PREFIX}:`)) {
+    return handleAppealButton(interaction);
+  }
+
+  // /clearwarn pick list and its Dismiss button.
+  if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(`${CLEARWARN_PREFIX}:`)) {
+    return handleClearWarnComponent(interaction);
+  }
+
+  // "Appeal" button in a warning / ban DM -> dropdown of what can be appealed -> pop-up with the reason.
+  if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_FORM_PREFIX}:`)) return handleAppealFormButton(interaction);
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${APPEAL_PICK_PREFIX}:`)) return handleAppealPick(interaction);
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPEAL_MODAL_PREFIX}:`)) return handleAppealModal(interaction);
+
+  // "Read the rules" button in a warning, ban or removal DM: opens the guide on its Rules page as a new message.
+  if (interaction.isButton() && interaction.customId.startsWith(`${RULES_PREFIX}:`)) {
+    const guild = client.guilds.cache.get(interaction.customId.split(':')[1]);
+    if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
+    return interaction.reply(guidePayload(guild, RULES_PAGE));
+  }
+
+  // Guide page buttons ("guide:<guildId>:<page>"), in DMs or ephemeral /guide replies.
+  if (interaction.isButton() && interaction.customId.startsWith(`${GUIDE_PREFIX}:`)) {
+    const [, guildId, page] = interaction.customId.split(':');
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
+    return interaction.update(guidePayload(guild, Number(page)));
+  }
+
+  // "View Guide" button on the sticky: guide shown only to the clicker.
+  if (interaction.isButton() && interaction.customId === GUIDE_BUTTON_ID) {
+    if (!interaction.guild) return interaction.reply({ content: 'Use this button inside a server.', flags: EPHEMERAL });
+    return interaction.reply({ ...guidePayload(interaction.guild, 0), flags: EPHEMERAL });
+  }
+
+  if (interaction.isButton() && interaction.customId === OPEN_BUTTON_ID) {
+    if (interaction.guildId && db.getBan(interaction.guildId, interaction.user.id)) {
+      return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
+    }
+    return interaction.showModal(confessModal());
+  }
+
+  // "Reply" button under a submission: open the modal aimed at that post.
+  if (interaction.isButton() && interaction.customId === REPLY_BUTTON_ID) {
+    if (db.getBan(interaction.guildId, interaction.user.id)) {
+      return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
+    }
+    const target = db.getConfessionByMessage(interaction.guildId, interaction.message.id);
+    if (!target || target.status !== 'posted') {
+      return interaction.reply({ content: 'That submission is no longer available to reply to.', flags: EPHEMERAL });
+    }
+    return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number }));
+  }
+
+  // 👍 👎 and poll-option buttons under a submission.
+  if (interaction.isButton() && interaction.customId.startsWith(`${REACT_PREFIX}:`)) return handleReactionButton(interaction);
+  if (interaction.isButton() && interaction.customId.startsWith(`${VOTE_PREFIX}:`)) return handleVoteButton(interaction);
+
+  // Close poll button, approval queue buttons (and the reject-reason pop-up), preview Post / Cancel.
+  if (interaction.isButton() && interaction.customId === CLOSE_POLL_ID) return handleClosePollButton(interaction);
+  if (interaction.isButton() && interaction.customId.startsWith(`${APPROVAL_PREFIX}:`)) return handleApprovalButton(interaction);
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${APPROVAL_REASON_PREFIX}:`)) return handleApprovalModal(interaction);
+  if (interaction.isButton() && interaction.customId.startsWith(`${DRAFT_PREFIX}:`)) return handleDraftButton(interaction);
+
+  // "Report" button under a submission, and its reason pop-up.
+  if (interaction.isButton() && interaction.customId === REPORT_BUTTON_ID) return handleReportButton(interaction);
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${REPORT_MODAL_PREFIX}:`)) return handleReportModal(interaction);
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_ID)) {
+    await interaction.deferReply({ flags: EPHEMERAL });
+    const replyTo = interaction.customId.split(':')[2] ?? null; // "confess:modal:<messageId>"
+    const guild = interaction.guild ?? (await client.guilds.fetch(interaction.guildId));
+    let image = null;
+    const upload = interaction.fields.getUploadedFiles('image')?.first();
+    if (upload) {
+      const prepared = await prepareImage(upload, uploadLimit(guild));
+      if (prepared.error) return interaction.editReply(prepared.error);
+      image = prepared.image;
+    }
+    // Topic is optional; the poll type exists only on new posts (not replies) and turns the post into a poll.
+    const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
+    const text = interaction.fields.getTextInputValue('text');
+    const cw = interaction.fields.getTextInputValue('cw');
+    let kind = null;
+    if (!replyTo) {
+      try {
+        kind = interaction.fields.getStringSelectValues('pollkind')?.[0] ?? null;
+      } catch {
+        /* a pop-up opened before this update has no poll type */
+      }
+    }
+    if (kind === 'choice') {
+      // Multiple choice: the options come from a second pop-up. Keep the first step (text, image) for ten minutes.
+      const token = randomUUID().slice(0, 8);
+      pending.set(token, { userId: interaction.user.id, guildId: guild.id, text, image, tag, cw, expires: Date.now() + 10 * 60_000 });
+      return interaction.editReply({
+        content: 'Multiple choice poll: add your options to finish. Nothing is posted until you do.',
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${OPTIONS_BUTTON_PREFIX}:${token}`).setLabel('Add options').setStyle(ButtonStyle.Primary),
+          ),
+        ],
+      });
+    }
+    const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
+    const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
+    return interaction.editReply(out.preview ?? resultText(out.result, guild));
+  }
+
+  // Multiple choice, step two: the "Add options" button opens the options pop-up, whose answer finishes the post.
+  if (interaction.isButton() && interaction.customId.startsWith(`${OPTIONS_BUTTON_PREFIX}:`)) {
+    const entry = pending.get(interaction.customId.split(':')[2]);
+    if (!entry || entry.userId !== interaction.user.id) {
+      return interaction.update({ content: 'That request expired. Write your submission again.', components: [] });
+    }
+    return interaction.showModal(optionsModal(interaction.customId.split(':')[2]));
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${OPTIONS_MODAL_PREFIX}:`)) {
+    const token = interaction.customId.split(':')[2];
+    const entry = pending.get(token);
+    if (!entry || entry.userId !== interaction.user.id) {
+      return interaction.reply({ content: 'That request expired. Write your submission again.', flags: EPHEMERAL });
+    }
+    await interaction.deferReply({ flags: EPHEMERAL });
+    const poll = parsePollOptions(interaction.fields.getTextInputValue('options'));
+    if (poll.error) return interaction.editReply(`${poll.error} Press **Add options** again to retry.`);
+    pending.delete(token);
+    const guild = client.guilds.cache.get(entry.guildId) ?? (await client.guilds.fetch(entry.guildId));
+    const out = await submitOrPreview(guild, entry.userId, entry.text, null, entry.image, { tag: entry.tag, cw: entry.cw, pollOptions: poll.options });
+    return interaction.editReply(out.preview ?? resultText(out.result, guild));
+  }
+
+  // Owner PIN: the pop-up asking for it (/sender, /ownerpin) and the Dismiss button under a sender lookup.
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(`${PIN_MODAL_PREFIX}:`)) return handlePinModal(interaction);
+  if (interaction.isButton() && interaction.customId === PIN_DISMISS_ID) return handlePinDismiss(interaction);
+
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('confess:pick:')) {
+    const token = interaction.customId.split(':')[2];
+    const entry = pending.get(token);
+    if (!entry || entry.userId !== interaction.user.id) {
+      return interaction.update({ content: 'That request expired. Send your submission again.', components: [] });
+    }
+    pending.delete(token);
+    const appealing = entry.appealText !== undefined;
+    await interaction.update({ content: appealing ? 'Sending your appeal...' : 'Posting...', components: [] });
+    const guild = client.guilds.cache.get(interaction.values[0]);
+    if (!guild) return interaction.editReply('I can no longer reach that server.');
+    if (appealing) return interaction.editReply(await submitBanAppeal(guild, interaction.user, entry.appealText));
+    const out = await submitOrPreview(guild, interaction.user.id, entry.text, null, entry.image, entry.extras ?? {});
+    if (out.preview) return interaction.editReply(out.preview);
+    return interaction.editReply(
+      out.result.ok ? `${resultText(out.result, guild, { inGuildName: true })}${entry.note ? `\n${entry.note}` : ''}` : out.result.error,
+    );
+  }
+}
+
+// Without an 'error' listener, one failed event handler or gateway error takes the whole process down.
+client.on(Events.Error, (err) => console.error('Client error:', err));
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
 client.login(process.env.DISCORD_TOKEN);

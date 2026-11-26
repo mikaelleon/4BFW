@@ -27,7 +27,7 @@ export default {
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .addBooleanOption((o) => o.setName('submissions').setDescription('The submissions channel (the sticky button stays)'))
     .addBooleanOption((o) => o.setName('modlog').setDescription('The mod-log channel'))
-    .addBooleanOption((o) => o.setName('backup').setDescription('The backup channel (a fresh backup is uploaded right after)'))
+    .addBooleanOption((o) => o.setName('backup').setDescription('The backup channel (a fresh backup is uploaded first)'))
     .addStringOption((o) => o.setName('server').setDescription('Which server (only needed in DMs)').setAutocomplete(true)),
 
   async execute(interaction) {
@@ -51,7 +51,7 @@ export default {
       modlog: cfg?.log_channel_id,
       backup: backupEnabled() ? process.env.BACKUP_CHANNEL_ID : null,
     };
-    const jobs = []; // { label, channel, keepId, isBackup }
+    const jobs = []; // { key, channel, keepId }
     const problems = [];
     for (const key of ['submissions', 'modlog', 'backup']) {
       if (!want[key]) continue;
@@ -74,12 +74,14 @@ export default {
       new ButtonBuilder().setCustomId(`clearch:yes:${token}`).setLabel('Delete the messages').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`clearch:no:${token}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary),
     );
-    const hasBackup = jobs.some((j) => j.key === 'backup');
+    // By channel id, not by option name: the backup channel may double as the mod log or submissions channel.
+    const isBackupChannel = (job) => backupEnabled() && job.channel.id === process.env.BACKUP_CHANNEL_ID;
+    const hasBackup = jobs.some(isBackupChannel);
     const msg = await interaction.editReply({
       content:
         `This will delete **every message I posted** in: ${jobs.map((j) => `<#${j.channel.id}>`).join(', ')}. ` +
         'It **cannot be undone**. The confession records in my database are not touched.' +
-        (hasBackup ? '\nClearing the backup channel removes all old backups. I upload a fresh one right after.' : '') +
+        (hasBackup ? '\nClearing the backup channel removes all old backups. I upload a fresh one first; if that fails, nothing there is deleted.' : '') +
         (problems.length ? `\n${problems.join('\n')}` : ''),
       components: [row],
     });
@@ -100,19 +102,24 @@ export default {
     withClearLock(guild.id, async () => {
       const lines = [];
       for (const job of jobs) {
+        let before;
+        if (isBackupChannel(job)) {
+          // Upload first: old backups are only deleted once a newer one is safely in the channel.
+          try {
+            const fresh = await runBackup(interaction.client, { force: true });
+            if (!fresh) throw new Error('backups are off');
+            before = fresh.messageId;
+            lines.push(`Fresh backup uploaded.${fresh.dropped ? ` ${fresh.dropped} image(s) were left out to fit the upload limit.` : ''}`);
+          } catch (err) {
+            lines.push(`<#${job.channel.id}>: nothing deleted, because a fresh backup FAILED (${err.message}).`);
+            continue;
+          }
+        }
         try {
-          const n = await clearBotMessages(job.channel, { keepId: job.keepId });
+          const n = await clearBotMessages(job.channel, { keepId: job.keepId, before });
           lines.push(`<#${job.channel.id}>: ${n} deleted`);
         } catch (err) {
           lines.push(`<#${job.channel.id}>: failed (${err.message})`);
-        }
-      }
-      if (hasBackup) {
-        try {
-          await runBackup(interaction.client, { force: true });
-          lines.push('Fresh backup uploaded.');
-        } catch (err) {
-          lines.push(`Fresh backup FAILED (${err.message}). It will retry on the next change.`);
         }
       }
       return lines;

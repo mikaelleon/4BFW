@@ -94,6 +94,9 @@ export async function closePoll(guild, row) {
   const image = closed.has_image ? db.getConfessionImage(closed.id) : null;
   const post = buildPost(closed, image);
   // Only the embed and buttons change; the attachments stay as they are.
+  // An image can be missing from the database (left out of a restored backup): point at the one already on the message.
+  const kept = closed.has_image && !image && !closed.cw ? msg.attachments.first()?.name : null;
+  if (kept) post.embeds[0].setImage(`attachment://${kept}`);
   await msg.edit({ embeds: post.embeds, components: post.components });
   await msg.reply({ embeds: [resultsEmbed(closed)], allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
   return true;

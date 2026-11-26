@@ -21,7 +21,7 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 | `BOT_PREFIX` | no | DM prefix (default `fw`) |
 | `TIMEZONE` | no | Footer dates (default `Asia/Manila`) |
 | `ID_HASH_SECRET` | no | Pins the hash key for bans and warnings. Set it once; never change it |
-| `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Encrypted DB backups to a private channel, every 15 minutes when the data changed. Both required |
+| `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Encrypted DB backups to a private channel, shortly after changes. Both required. If the database outgrows the upload limit, images are left out of the backup (never records); failures are posted in that channel |
 | `PORT` | no | HTTP keep-alive (default `3000`) |
 
 ## Sending a submission
@@ -83,7 +83,7 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 `/announce [role] [everyone]` DMs the guide (throttled; the result is DMed to you). The role defaults to `/setup role`. With no role you must pass `everyone: true`. `/setup options welcome_dm:true` DMs the guide to each new member.
 
-`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup right after). Both need Manage Server. The result appears as a dismissable message where you ran the command (by DM if the job takes over 15 minutes). After adding them, run `npm run deploy` to register the commands.
+`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup first and deletes the older ones only if that worked). Both need Manage Server. The result appears as a dismissable message where you ran the command (by DM if the job takes over 15 minutes). After adding them, run `npm run deploy` to register the commands.
 
 `/mod` (Manage Server or the moderator role), all by Submission ID:
 

@@ -35,7 +35,10 @@ export async function maybeFeature(guild, row) {
   if (fresh.featured_message_id) {
     const channel = await guild.channels.fetch(fresh.featured_channel_id).catch(() => null);
     // No `files`: the copy keeps its attachments, the embed just gets new numbers.
-    await channel?.messages.edit(fresh.featured_message_id, { embeds: [featuredEmbed(guild.id, fresh, counts, imageName)] }).catch(() => {});
+    const copy = await channel?.messages.fetch(fresh.featured_message_id).catch(() => null);
+    // An image can be missing from the database (left out of a restored backup): keep the one already on the copy.
+    const kept = fresh.has_image && !image && !fresh.cw ? copy?.attachments.first()?.name : null;
+    await copy?.edit({ embeds: [featuredEmbed(guild.id, fresh, counts, kept ?? imageName)] }).catch(() => {});
     return;
   }
   if (counts.up < (cfg.featured_threshold || 5) || busy.has(fresh.id)) return;

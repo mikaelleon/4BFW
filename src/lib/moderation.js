@@ -32,7 +32,9 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
 
   // The sender ID is never shown here: the server owner looks it up with /sender (see owner-pin.js).
   const row = id ? db.getConfession(guild.id, id) : null;
-  const subNo = subId ?? id; // per-server number; `id` is the internal key. Entries not about one post (a ban appeal) have none.
+  // The per-server Submission ID, read from the stored post. `id` is the internal key and must never be shown: /mod would
+  // act on a different submission. Entries not about one post (a ban appeal) have none.
+  const subNo = row?.sub_id ?? subId;
   const lead = [tagText(row?.tag), row?.is_poll ? '📊 Poll' : null].filter(Boolean).join(' · '); // topic sits right under the title
 
   const parts = [];

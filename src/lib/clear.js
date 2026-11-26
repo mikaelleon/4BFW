@@ -48,12 +48,14 @@ export async function clearDmsWith(client, user) {
   return deleted;
 }
 
-/** Delete every message this bot sent in `channel`, except `keepId` (the sticky). Returns how many were deleted. */
-export async function clearBotMessages(channel, { keepId } = {}) {
+/**
+ * Delete every message this bot sent in `channel`, except `keepId` (the sticky). With `before` (a message id) only older
+ * messages are touched. Returns how many were deleted.
+ */
+export async function clearBotMessages(channel, { keepId, before } = {}) {
   const me = channel.client.user.id;
   const canBulk = Boolean(channel.permissionsFor(channel.guild.members.me)?.has(PermissionFlagsBits.ManageMessages));
   let deleted = 0;
-  let before;
   for (let page = 0; page < MAX_PAGES; page++) {
     const batch = await channel.messages.fetch({ limit: 100, before });
     if (!batch.size) break;
