@@ -1,9 +1,9 @@
 import { SlashCommandBuilder, InteractionContextType, ApplicationIntegrationType, MessageFlags } from 'discord.js';
 import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
-import { MAX_LEN } from '../lib/confession.js';
+import { MAX_LEN, whyCannotPost } from '../lib/confession.js';
 import { resultText, submitOrPreview } from '../lib/drafts.js';
-import { prepareImage, uploadLimit } from '../lib/image.js';
+import { BUSY_MESSAGE, claimUpload, prepareImage, uploadLimit } from '../lib/image.js';
 import { parsePollOptions } from '../lib/engagement.js';
 import { MAX_CW_LEN } from '../lib/render.js';
 import { tagChoices } from '../lib/tags.js';
@@ -69,20 +69,32 @@ export default {
     const poll = parsePollOptions(interaction.options.getString('poll'), '|');
     if (poll.error) return interaction.editReply(poll.error);
 
-    let image = null;
+    let release = null;
     if (attachment) {
-      const prepared = await prepareImage(attachment, uploadLimit(guild));
-      if (prepared.error) return interaction.editReply(prepared.error);
-      image = prepared.image;
+      const blocked = await whyCannotPost(guild, interaction.user.id);
+      if (blocked) return interaction.editReply([...notes, blocked].join('\n'));
+      release = claimUpload(interaction.user.id);
+      if (!release) return interaction.editReply(BUSY_MESSAGE);
     }
 
-    const out = await submitOrPreview(guild, interaction.user.id, message ?? '', null, image, {
-      tag: interaction.options.getString('topic'),
-      cw: interaction.options.getString('cw'),
-      pollOptions: poll.options,
-      pollHours: interaction.options.getInteger('poll_hours'),
-    });
-    if (out.preview) return interaction.editReply({ ...out.preview, content: [...notes, out.preview.content].join('\n') });
-    return interaction.editReply([...notes, resultText(out.result, guild, { inGuildName: !interaction.inGuild(), url: true })].join('\n'));
+    try {
+      let image = null;
+      if (attachment) {
+        const prepared = await prepareImage(attachment, uploadLimit(guild));
+        if (prepared.error) return interaction.editReply(prepared.error);
+        image = prepared.image;
+      }
+
+      const out = await submitOrPreview(guild, interaction.user.id, message ?? '', null, image, {
+        tag: interaction.options.getString('topic'),
+        cw: interaction.options.getString('cw'),
+        pollOptions: poll.options,
+        pollHours: interaction.options.getInteger('poll_hours'),
+      });
+      if (out.preview) return await interaction.editReply({ ...out.preview, content: [...notes, out.preview.content].join('\n') });
+      return await interaction.editReply([...notes, resultText(out.result, guild, { inGuildName: !interaction.inGuild(), url: true })].join('\n'));
+    } finally {
+      release?.();
+    }
   },
 };

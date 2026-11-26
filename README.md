@@ -83,7 +83,7 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 `/announce [role] [everyone]` DMs the guide (throttled; the result is DMed to you). The role defaults to `/setup role`. With no role you must pass `everyone: true`. `/setup options welcome_dm:true` DMs the guide to each new member.
 
-`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup first and deletes the older ones only if that worked). Both need Manage Server. The result appears as a dismissable message where you ran the command (by DM if the job takes over 15 minutes). After adding them, run `npm run deploy` to register the commands.
+`/cleardms` (server owner only, in the server, asks for the owner PIN) deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup first and deletes the older ones only if that worked). `/clearchannels` needs Manage Server. The result appears as a dismissable message where you ran the command (by DM if the job takes over 15 minutes). After adding them, run `npm run deploy` to register the commands.
 
 `/mod` (Manage Server or the moderator role), all by Submission ID:
 
@@ -100,7 +100,7 @@ Buttons under an entry: **Warn**, **Delete**, and **Ban** (**Unban** once the au
 
 `/clearwarn user:|user_id: [warning:W-0042|all] [reason:]` (server owner only, asks for the owner PIN) lifts warnings (or, from its pick list, a posting ban) and DMs the user. Without `warning` it shows a private pick list. It is owner-only because a named user's warnings can be matched to mod-log entries.
 
-`/setup modrole` grants those buttons, `/mod`, and **Submission ID**. `/setup`, `/announce`, `/filter`, `/sender`, `/clearwarn`, and `/ownerpin` stay restricted (Manage Server, or owner-only for the PIN commands). If `/mod` is hidden from the role, allow it under Server Settings > Integrations. Keep the mod log staff-only: it contains the full text and any image.
+`/setup modrole` grants those buttons, `/mod`, and **Submission ID**. `/setup`, `/announce`, `/filter`, `/sender`, `/clearwarn`, `/cleardms`, and `/ownerpin` stay restricted (Manage Server, or owner-only for the PIN commands). If `/mod` is hidden from the role, allow it under Server Settings > Integrations. Keep the mod log staff-only: it contains the full text and any image.
 
 `/setup options approval:true` holds new posts in the mod log with **Approve** / **Reject** until a moderator acts. The public number is assigned on approval. Default is off (post first, moderate after), which matches the guide. Filter holds use the same queue.
 

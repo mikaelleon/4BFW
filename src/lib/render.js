@@ -8,7 +8,11 @@ export const MAX_CW_LEN = 60;
 export function renderBody(body, cw) {
   if (!cw) return body ?? '';
   const warning = `⚠️ **Content warning: ${cw}**`;
-  return body ? `${warning}\n||${body}||` : warning;
+  if (!body) return warning;
+  // A `||` typed in the text would close the spoiler early. A zero-width space splits such pairs (also inside code,
+  // where a backslash escape would show), and one at each end keeps a leading or trailing `|` or `\` off our markers.
+  const safe = body.replace(/\|(?=\|)/g, '|\u200b');
+  return `${warning}\n||\u200b${safe}\u200b||`;
 }
 
 /**

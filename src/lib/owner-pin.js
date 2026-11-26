@@ -87,7 +87,7 @@ async function dmPin(guild, pin, reason) {
         notice(
           `Your owner PIN for ${guild.name}`,
           `${reason}\n## \`${pin}\`\n` +
-            'You need it for `/sender` and `/clearwarn`. Keep it private. ' +
+            'You need it for `/sender`, `/clearwarn` and `/cleardms`. Keep it private. ' +
             'Change it any time with `/ownerpin`. Delete this message once you have saved it somewhere safe.',
         ),
       ],

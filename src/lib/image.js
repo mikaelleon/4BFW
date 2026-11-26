@@ -1,4 +1,5 @@
 // Image attachments for submissions (DM, /fw option, modal upload).
+import { stripMetadata } from './strip-metadata.js';
 
 const MIB = 1024 * 1024;
 // Discord's upload limit per server boost tier. A post is re-uploaded by the bot, so the server's limit applies.
@@ -36,15 +37,28 @@ export function pickImage(attachments, limit) {
 
 /**
  * Download the image so it can be re-uploaded to the server channel (DM attachment links expire).
- * The original filename is dropped on purpose: names can identify the sender.
+ * The original filename is dropped on purpose: names can identify the sender. So is embedded metadata (GPS position,
+ * camera, owner name). Throws for a file that is not a readable PNG, JPG, GIF or WEBP.
  */
 export async function downloadImage(att, limit) {
   const res = await fetch(att.url);
   if (!res.ok) throw new Error(`download failed (${res.status})`);
   const buffer = Buffer.from(await res.arrayBuffer());
   if (buffer.length > limit) throw new Error('image too large');
-  return { buffer, name: `image.${extensionOf(att)}` };
+  const clean = stripMetadata(buffer);
+  return { buffer: clean.buffer, name: `image.${clean.ext}` };
 }
+
+const uploading = new Set(); // users with an image being downloaded or posted right now
+
+/** One image at a time per person, so a burst of uploads cannot fill memory. Returns a release function, or null when busy. */
+export function claimUpload(userId) {
+  if (uploading.has(userId)) return null;
+  uploading.add(userId);
+  return () => uploading.delete(userId);
+}
+
+export const BUSY_MESSAGE = 'I am still working on your last image. Wait a moment, then send this one again.';
 
 /** One attachment (slash option or modal upload) -> { image } ready for submitConfession, or { error } for the user. */
 export async function prepareImage(att, limit) {
@@ -54,6 +68,6 @@ export async function prepareImage(att, limit) {
     return { image: await downloadImage(image, limit) };
   } catch (err) {
     console.error('Image download failed:', err);
-    return { error: 'I could not download that image. Try again.' };
+    return { error: 'I could not download or read that image. Try again, or save it as a PNG or JPG first.' };
   }
 }

@@ -395,6 +395,26 @@ async function afterPublish(guild, row, msg, targets, { title, actor } = {}) {
 }
 
 /**
+ * Why this person may not post here right now (not a member, banned, too new, cooldown, daily cap), or null. Also asked
+ * before an image is downloaded, so someone who cannot post cannot make the bot fetch and hold files.
+ */
+export async function whyCannotPost(guild, userId) {
+  const cfg = db.getGuild(guild.id);
+  if (!cfg?.channel_id) return 'Submissions are not set up in this server yet.';
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) return 'You are not a member of that server.';
+  if (db.getBan(guild.id, userId)) return 'You are banned from posting in this server.';
+
+  const tooNew = checkEligibility(member, cfg);
+  if (tooNew) return tooNew;
+
+  const waitMs = db.lastConfessionAt(guild.id, userId) + cfg.cooldown * 1000 - Date.now();
+  if (waitMs > 0) return `Slow down. Try again in ${Math.ceil(waitMs / 1000)}s.`;
+
+  return checkDailyCap(guild.id, userId, cfg);
+}
+
+/**
  * `image` = { buffer, name } (re-uploaded into the channel).
  * `extras` = { tag, pollOptions, pollHours, cw }: topic key, poll option labels (+ how long it stays open),
  * and a content warning label.
@@ -422,18 +442,8 @@ export function submitConfession(guild, userId, rawContent, replyToMessageId = n
     const limit = uploadLimit(guild);
     if (image && image.buffer.length > limit) return fail(`That image is too big for this server. ${imageHelp(limit)}`);
 
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) return fail('You are not a member of that server.');
-    if (db.getBan(guild.id, userId)) return fail('You are banned from posting in this server.');
-
-    const tooNew = checkEligibility(member, cfg);
-    if (tooNew) return fail(tooNew);
-
-    const waitMs = db.lastConfessionAt(guild.id, userId) + cfg.cooldown * 1000 - Date.now();
-    if (waitMs > 0) return fail(`Slow down. Try again in ${Math.ceil(waitMs / 1000)}s.`);
-
-    const capped = checkDailyCap(guild.id, userId, cfg);
-    if (capped) return fail(capped);
+    const blocked = await whyCannotPost(guild, userId);
+    if (blocked) return fail(blocked);
     if (isDuplicate(guild.id, content, cfg.dup_hours)) return fail(DUPLICATE_MESSAGE);
 
     // Auto-filter: reject right away, or hold the post for a moderator (the author is only told it awaits review).

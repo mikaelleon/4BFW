@@ -34,10 +34,12 @@ import {
   confessModal,
   ensureSticky,
   optionsModal,
+  whyCannotPost,
 } from './lib/confession.js';
 import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } from './lib/owner-pin.js';
 import { prefix } from './lib/format.js';
-import { downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
+import { BUSY_MESSAGE, claimUpload, downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
+import { holdsImages, keep } from './lib/held.js';
 import { CONTROL_PREFIX } from './lib/controls-row.js';
 import { REASON_PREFIX, handleControlButton, handleReasonModal } from './lib/controls.js';
 import { handleClosePollButton, handleReactionButton, handleVoteButton, parsePollOptions } from './lib/engagement.js';
@@ -81,7 +83,7 @@ const EPHEMERAL = MessageFlags.Ephemeral;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /* DMs where the user is in several servers: remember their text while they pick one. */
-const pending = new Map(); // token -> { userId, text, image, note, expires }
+const pending = holdsImages(new Map()); // token -> { userId, text, image, note, expires }
 setInterval(() => {
   const now = Date.now();
   for (const [token, p] of pending) if (p.expires < now) pending.delete(token);
@@ -167,35 +169,48 @@ async function handleDm(message, catchUp = false) {
   if (!body && !attachment) return dm(rejected ? imageHelp(limit) : usage);
   if (body.length > MAX_LEN) return dm(`Too long. Max ${MAX_LEN} characters.`);
 
-  let image = null;
+  let release = null;
   if (attachment) {
-    try {
-      image = await downloadImage(attachment, limit);
-    } catch (err) {
-      console.error('Image download failed:', err);
-      return dm('I could not download that image. Try sending it again.');
+    // Download only for someone who could post in at least one of these servers right now.
+    const blocks = await Promise.all(guilds.map((g) => whyCannotPost(g, message.author.id)));
+    if (blocks.every(Boolean)) return dm(blocks[0]);
+    release = claimUpload(message.author.id);
+    if (!release) return dm(BUSY_MESSAGE);
+  }
+
+  try {
+    let image = null;
+    if (attachment) {
+      try {
+        image = await downloadImage(attachment, limit);
+      } catch (err) {
+        console.error('Image download failed:', err);
+        return await dm('I could not download or read that image. Send it again, or save it as a PNG or JPG first.');
+      }
     }
-  }
-  const note = [extra ? 'Only the first image was used.' : '', rejected && attachment ? `Skipped a file I cannot use. ${imageHelp(limit)}` : '']
-    .filter(Boolean)
-    .join(' ');
-  const late = catchUp ? ' I was offline when you sent it, so it went up late.' : '';
-  const posted = (res, guild) => (res.ok ? `${resultText(res, guild, { inGuildName: true })}${late}${note ? `\n${note}` : ''}` : res.error);
+    const note = [extra ? 'Only the first image was used.' : '', rejected && attachment ? `Skipped a file I cannot use. ${imageHelp(limit)}` : '']
+      .filter(Boolean)
+      .join(' ');
+    const late = catchUp ? ' I was offline when you sent it, so it went up late.' : '';
+    const posted = (res, guild) => (res.ok ? `${resultText(res, guild, { inGuildName: true })}${late}${note ? `\n${note}` : ''}` : res.error);
 
-  if (guilds.length === 1) {
-    const out = await submitOrPreview(guilds[0], message.author.id, body, null, image, extras);
-    return dm(out.preview ?? posted(out.result, guilds[0]));
-  }
+    if (guilds.length === 1) {
+      const out = await submitOrPreview(guilds[0], message.author.id, body, null, image, extras);
+      return await dm(out.preview ?? posted(out.result, guilds[0]));
+    }
 
-  const token = randomUUID().slice(0, 8);
-  pending.set(token, { userId: message.author.id, text: body, image, note, extras, expires: Date.now() + 5 * 60_000 });
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`confess:pick:${token}`)
-    .setPlaceholder('Which server?')
-    .addOptions(guilds.slice(0, 25).map((g) => ({ label: g.name.slice(0, 100), value: g.id })));
-  return message.author
-    .send({ content: `Which server should this go to?${late}`, components: [new ActionRowBuilder().addComponents(menu)] })
-    .catch(() => {});
+    const token = randomUUID().slice(0, 8);
+    keep(pending, token, { userId: message.author.id, text: body, image, note, extras, expires: Date.now() + 5 * 60_000 });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`confess:pick:${token}`)
+      .setPlaceholder('Which server?')
+      .addOptions(guilds.slice(0, 25).map((g) => ({ label: g.name.slice(0, 100), value: g.id })));
+    return await message.author
+      .send({ content: `Which server should this go to?${late}`, components: [new ActionRowBuilder().addComponents(menu)] })
+      .catch(() => {});
+  } finally {
+    release?.();
+  }
 }
 
 client.on(Events.MessageCreate, async (message) => {
@@ -369,41 +384,52 @@ async function routeInteraction(interaction) {
     await interaction.deferReply({ flags: EPHEMERAL });
     const replyTo = interaction.customId.split(':')[2] ?? null; // "confess:modal:<messageId>"
     const guild = interaction.guild ?? (await client.guilds.fetch(interaction.guildId));
-    let image = null;
     const upload = interaction.fields.getUploadedFiles('image')?.first();
+    let release = null;
     if (upload) {
-      const prepared = await prepareImage(upload, uploadLimit(guild));
-      if (prepared.error) return interaction.editReply(prepared.error);
-      image = prepared.image;
+      const blocked = await whyCannotPost(guild, interaction.user.id);
+      if (blocked) return interaction.editReply(blocked);
+      release = claimUpload(interaction.user.id);
+      if (!release) return interaction.editReply(BUSY_MESSAGE);
     }
-    // Topic is optional; the poll type exists only on new posts (not replies) and turns the post into a poll.
-    const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
-    const text = interaction.fields.getTextInputValue('text');
-    const cw = interaction.fields.getTextInputValue('cw');
-    let kind = null;
-    if (!replyTo) {
-      try {
-        kind = interaction.fields.getStringSelectValues('pollkind')?.[0] ?? null;
-      } catch {
-        /* a pop-up opened before this update has no poll type */
+    try {
+      let image = null;
+      if (upload) {
+        const prepared = await prepareImage(upload, uploadLimit(guild));
+        if (prepared.error) return await interaction.editReply(prepared.error);
+        image = prepared.image;
       }
+      // Topic is optional; the poll type exists only on new posts (not replies) and turns the post into a poll.
+      const tag = interaction.fields.getStringSelectValues('tag')?.[0] ?? null;
+      const text = interaction.fields.getTextInputValue('text');
+      const cw = interaction.fields.getTextInputValue('cw');
+      let kind = null;
+      if (!replyTo) {
+        try {
+          kind = interaction.fields.getStringSelectValues('pollkind')?.[0] ?? null;
+        } catch {
+          /* a pop-up opened before this update has no poll type */
+        }
+      }
+      if (kind === 'choice') {
+        // Multiple choice: the options come from a second pop-up. Keep the first step (text, image) for ten minutes.
+        const token = randomUUID().slice(0, 8);
+        keep(pending, token, { userId: interaction.user.id, guildId: guild.id, text, image, tag, cw, expires: Date.now() + 10 * 60_000 });
+        return await interaction.editReply({
+          content: 'Multiple choice poll: add your options to finish. Nothing is posted until you do.',
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`${OPTIONS_BUTTON_PREFIX}:${token}`).setLabel('Add options').setStyle(ButtonStyle.Primary),
+            ),
+          ],
+        });
+      }
+      const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
+      const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
+      return await interaction.editReply(out.preview ?? resultText(out.result, guild));
+    } finally {
+      release?.();
     }
-    if (kind === 'choice') {
-      // Multiple choice: the options come from a second pop-up. Keep the first step (text, image) for ten minutes.
-      const token = randomUUID().slice(0, 8);
-      pending.set(token, { userId: interaction.user.id, guildId: guild.id, text, image, tag, cw, expires: Date.now() + 10 * 60_000 });
-      return interaction.editReply({
-        content: 'Multiple choice poll: add your options to finish. Nothing is posted until you do.',
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`${OPTIONS_BUTTON_PREFIX}:${token}`).setLabel('Add options').setStyle(ButtonStyle.Primary),
-          ),
-        ],
-      });
-    }
-    const pollOptions = kind === 'yesno' ? [...YES_NO] : kind === 'likert' ? [...LIKERT] : null;
-    const out = await submitOrPreview(guild, interaction.user.id, text, replyTo, image, { tag, cw, pollOptions });
-    return interaction.editReply(out.preview ?? resultText(out.result, guild));
   }
 
   // Multiple choice, step two: the "Add options" button opens the options pop-up, whose answer finishes the post.

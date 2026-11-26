@@ -6,11 +6,12 @@ import * as db from '../db.js';
 import { COLOR, anonTitle } from './format.js';
 import { confessionEmbed, submitConfession } from './confession.js';
 import { postFiles, renderBody } from './render.js';
+import { holdsImages, keep } from './held.js';
 import { getTag } from './tags.js';
 
 export const DRAFT_PREFIX = 'draft'; // buttons "draft:<post|cancel>:<token>"
 const TTL_MS = 10 * 60_000;
-const drafts = new Map(); // token -> { userId, guildId, content, replyTo, image, extras, expires }
+const drafts = holdsImages(new Map()); // token -> { userId, guildId, content, replyTo, image, extras, expires }
 
 setInterval(() => {
   const now = Date.now();
@@ -57,7 +58,7 @@ export async function submitOrPreview(guild, userId, content, replyTo, image, ex
   if (!db.getPrefs(userId).preview) return { result: await submitConfession(guild, userId, content, replyTo, image, extras) };
   const token = randomUUID().slice(0, 8);
   const draft = { userId, guildId: guild.id, content: (content ?? '').trim(), replyTo, image, extras, expires: Date.now() + TTL_MS };
-  drafts.set(token, draft);
+  keep(drafts, token, draft);
   return { preview: previewPayload(guild, token, draft) };
 }
 
