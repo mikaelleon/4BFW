@@ -59,6 +59,7 @@ import {
 } from './lib/appeals.js';
 import { BAN_APPEAL_PREFIX, appealUsage, bannedGuildsOf, handleBanAppealButton, submitBanAppeal } from './lib/ban-appeals.js';
 import { APPEAL_FORM_PREFIX, RULES_PREFIX } from './lib/notices.js';
+import { CLEARWARN_PREFIX, handleClearWarnComponent } from './lib/clear-warnings.js';
 
 // Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
 http
@@ -278,6 +279,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Overturn / Uphold buttons on a warning appeal in the mod log.
     if (interaction.isButton() && interaction.customId.startsWith(`${APPEAL_PREFIX}:`)) {
       return handleAppealButton(interaction);
+    }
+
+    // /clearwarn pick list and its Dismiss button.
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(`${CLEARWARN_PREFIX}:`)) {
+      return handleClearWarnComponent(interaction);
     }
 
     // "Appeal" button in a warning / ban DM -> dropdown of what can be appealed -> pop-up with the reason.

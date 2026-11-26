@@ -88,7 +88,7 @@ export async function handleBanAppealButton(interaction) {
     notice(
       lift ? `Ban lifted in ${guild.name}` : `Appeal denied in ${guild.name}`,
       lift
-        ? 'Your appeal was accepted. You can post again. Please follow the rules.'
+        ? 'A moderator accepted your appeal and lifted your ban. You can post again. Please follow the rules.'
         : `Your appeal was reviewed and the ban stands. You can appeal again in 7 days with \`${prefix()} appeal <why>\`.`,
     ),
   );

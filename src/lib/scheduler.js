@@ -15,7 +15,7 @@ async function sweepBans(client) {
     const guild = client.guilds.cache.get(ban.guild_id);
     if (!guild) continue; // bot left the server: the ban row is simply gone
     await dmUser(client, ban.dm_id, notice(`Ban lifted in ${guild.name}`, 'Your timed ban has ended. You can post again. Please follow the rules.'));
-    await systemLog(guild, 'Timed ban expired', `A timed ban has ended${ban.dm_id ? ` (sender ||${ban.dm_id}||)` : ''}.`);
+    await systemLog(guild, 'Timed ban expired', 'A timed ban has ended.');
   }
 }
 

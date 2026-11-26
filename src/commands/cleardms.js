@@ -11,7 +11,7 @@ import {
 } from 'discord.js';
 import { randomUUID } from 'node:crypto';
 import { resolveGuild } from '../lib/context.js';
-import { clearDmsWith, isClearing, withClearLock } from '../lib/clear.js';
+import { clearDmsWith, isClearing, reportResult, withClearLock } from '../lib/clear.js';
 
 const MAX_PEOPLE = 2000;
 
@@ -94,7 +94,7 @@ export default {
     }
     if (click.customId.startsWith('cleardms:no')) return click.update({ content: 'Cancelled. Nothing was deleted.', components: [] });
     await click.update({
-      content: `Clearing DMs for ${targets.size} ${targets.size === 1 ? 'person' : 'people'}. It is throttled to stay under Discord rate limits; I will DM you the result when done.`,
+      content: `Clearing DMs for ${targets.size} ${targets.size === 1 ? 'person' : 'people'}. It is throttled to stay under Discord rate limits; The result shows up here when done (by DM if it takes over 15 minutes).`,
       components: [],
     });
 
@@ -112,13 +112,14 @@ export default {
       return stats;
     })
       .then((s) =>
-        interaction.user.send(
+        reportResult(
+          interaction,
           `DM clear for **${guild.name}** finished: ${s.messages} message${s.messages === 1 ? '' : 's'} deleted across ${s.people} ${s.people === 1 ? 'person' : 'people'}, ${s.failed} could not be reached.`,
         ),
       )
       .catch((err) => {
         console.error('DM clear failed:', err);
-        interaction.user.send(`DM clear for **${guild.name}** failed: ${err.message}`).catch(() => {});
+        return reportResult(interaction, `DM clear for **${guild.name}** failed: ${err.message}`);
       });
   },
 };

@@ -12,7 +12,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
-import { clearBotMessages, isClearing, withClearLock } from '../lib/clear.js';
+import { clearBotMessages, isClearing, reportResult, withClearLock } from '../lib/clear.js';
 import { runBackup } from '../lib/backup.js';
 import { backupEnabled } from '../lib/backup-crypto.js';
 
@@ -95,7 +95,7 @@ export default {
       return interaction.editReply({ content: 'Timed out. Nothing was deleted.', components: [] });
     }
     if (click.customId.startsWith('clearch:no')) return click.update({ content: 'Cancelled. Nothing was deleted.', components: [] });
-    await click.update({ content: 'Clearing. Large channels take a while; I will DM you the result when done.', components: [] });
+    await click.update({ content: 'Clearing. Large channels take a while. The result shows up here when done (by DM if it takes over 15 minutes).', components: [] });
 
     withClearLock(guild.id, async () => {
       const lines = [];
@@ -117,10 +117,10 @@ export default {
       }
       return lines;
     })
-      .then((lines) => interaction.user.send(`Channel clear for **${guild.name}** finished:\n${lines.join('\n')}`))
+      .then((lines) => reportResult(interaction, `Channel clear for **${guild.name}** finished:\n${lines.join('\n')}`))
       .catch((err) => {
         console.error('Channel clear failed:', err);
-        interaction.user.send(`Channel clear for **${guild.name}** failed: ${err.message}`).catch(() => {});
+        return reportResult(interaction, `Channel clear for **${guild.name}** failed: ${err.message}`);
       });
   },
 };

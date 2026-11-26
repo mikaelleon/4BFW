@@ -87,7 +87,7 @@ async function dmPin(guild, pin, reason) {
         notice(
           `Your owner PIN for ${guild.name}`,
           `${reason}\n## \`${pin}\`\n` +
-            'You need it to look up a sender ID with `/sender`. Keep it private. ' +
+            'You need it for `/sender` and `/clearwarn`. Keep it private. ' +
             'Change it any time with `/ownerpin`. Delete this message once you have saved it somewhere safe.',
         ),
       ],
@@ -120,12 +120,15 @@ const pinInput = (id, label, description, required) =>
       new TextInputBuilder().setCustomId(id).setStyle(TextInputStyle.Short).setMinLength(required ? 6 : 0).setMaxLength(6).setRequired(required),
     );
 
-/** Pop-up asking for the PIN (and a new one for kind "change"). Cancelled if not sent within 60 seconds. */
+/**
+ * Pop-up asking for the PIN (and a new one for kind "change"). Cancelled if not sent within 60 seconds.
+ * Kind "action" runs `extra.run(modalInteraction, guild)` once the PIN checks out.
+ */
 export function promptPin(interaction, kind, extra = {}) {
   const token = randomBytes(6).toString('hex');
   pendingPrompts.set(token, { userId: interaction.user.id, guildId: interaction.guildId, kind, ...extra, expires: Date.now() + PIN_WINDOW_MS });
-  const modal = new ModalBuilder().setCustomId(`${PIN_MODAL_PREFIX}:${token}`).setTitle(kind === 'sender' ? 'Owner PIN' : 'Change owner PIN');
-  if (kind === 'sender' || hasPin(interaction.guildId)) {
+  const modal = new ModalBuilder().setCustomId(`${PIN_MODAL_PREFIX}:${token}`).setTitle(kind === 'change' ? 'Change owner PIN' : 'Owner PIN');
+  if (kind !== 'change' || hasPin(interaction.guildId)) {
     modal.addLabelComponents(pinInput('pin', 'Your 6-digit PIN', 'You have 60 seconds. After that the request is cancelled.', true));
   }
   if (kind === 'change') {
@@ -148,13 +151,15 @@ export async function handlePinModal(interaction) {
   if (!(await isOwner(interaction))) return say('Only the server owner can do this.');
 
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
-  const gated = prompt.kind === 'sender' || hasPin(guild.id);
+  const gated = prompt.kind !== 'change' || hasPin(guild.id);
   if (gated) {
     const wait = lockedFor(guild.id);
     if (wait) return say(`Too many wrong PINs. Try again in ${wait} minute${wait === 1 ? '' : 's'}.`);
     const typed = interaction.fields.getTextInputValue('pin').trim();
     if (!isValidPin(typed) || !checkPin(guild.id, typed)) return say('Wrong PIN. The request was cancelled.');
   }
+
+  if (prompt.kind === 'action') return prompt.run(interaction, guild);
 
   if (prompt.kind === 'sender') {
     const row = db.getConfessionBySubId(guild.id, prompt.subId);

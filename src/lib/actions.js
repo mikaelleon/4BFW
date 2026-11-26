@@ -2,7 +2,7 @@
 import * as db from '../db.js';
 import { deleteConfessionMessage, restoreConfessionMessage } from './confession.js';
 import { untilTag } from './duration.js';
-import { anonRef } from './format.js';
+import { anonRef, anonTitle } from './format.js';
 import { dmUser, modLog, notice } from './moderation.js';
 import { banNotice, deletionNotice, warningCode, warningNotice } from './notices.js';
 
@@ -93,7 +93,8 @@ export async function banAuthor(client, guild, row, actor, reason, { alsoDelete 
 export async function unbanAuthor(client, guild, row, actor, { clearWarnings = true } = {}) {
   if (!db.unbanUser(guild.id, row.author_key)) return 'That author is not banned.';
   if (clearWarnings) db.clearWarnings(guild.id, row.author_key);
-  await dmUser(client, row.author_id, notice(`Ban lifted in ${guild.name}`, 'You can post again. Please follow the rules.'));
+  const reset = clearWarnings ? ' Your warnings were cleared too.' : '';
+  await dmUser(client, row.author_id, notice(`Ban lifted in ${guild.name}`, `A moderator lifted your posting ban. You can post again.${reset} Please follow the rules.`));
   await modLog(guild, { ...logBase(guild, row, actor), title: 'Author unbanned' });
   return `Author of ${label(row)} can post again.`;
 }
@@ -106,6 +107,15 @@ export async function restoreSubmission(guild, row, actor) {
     return false;
   });
   if (!ok) return 'I could not restore it: the original message is gone or I cannot edit it. Delete it instead.';
+  await dmUser(
+    guild.client,
+    row.author_id,
+    notice(
+      `Reports lifted in ${guild.name}`,
+      `A moderator reviewed the reports on your **${anonTitle(row.number)}**, dismissed them and restored the post.\n` +
+        `[View it](https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id})`,
+    ),
+  );
   await modLog(guild, { ...logBase(guild, row, actor), title: 'Submission restored (reports dismissed)' });
   return `Submission ${label(row)} is visible again and its reports were cleared.`;
 }

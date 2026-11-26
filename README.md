@@ -83,7 +83,7 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 
 `/announce [role] [everyone]` DMs the guide (throttled; the result is DMed to you). The role defaults to `/setup role`. With no role you must pass `everyone: true`. `/setup options welcome_dm:true` DMs the guide to each new member.
 
-`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup right after). Both need Manage Server, and the result is DMed to you. After adding them, run `npm run deploy` to register the commands.
+`/cleardms` deletes the DMs the bot sent (guide, warnings, notices): `everyone`, a `role`/`role_id`, a `user`, or `user_ids` (IDs or mentions). Only members of the server, only the bot's own messages, with a confirm button. `/clearchannels submissions|modlog|backup` deletes the bot's messages in those channels (the sticky button stays; clearing the backup channel uploads a fresh backup right after). Both need Manage Server. The result appears as a dismissable message where you ran the command (by DM if the job takes over 15 minutes). After adding them, run `npm run deploy` to register the commands.
 
 `/mod` (Manage Server or the moderator role), all by Submission ID:
 
@@ -94,11 +94,13 @@ The warn limit (default 3) auto-bans. Warnings older than `warn_expiry_days` (`0
 
 ## Mod log
 
-Every new submission is logged with its text, image, jump link, topic, poll options, public number, and timestamp. The embed title is the Submission ID. There is no sender ID on the entry.
+Every new submission is logged with its text, image, jump link, topic, poll marker, public number, and timestamp. The embed title is the Submission ID. There is no sender ID on the entry.
 
 Buttons under an entry: **Warn**, **Delete**, and **Ban** (**Unban** once the author is banned). Warn, Delete, and Ban ask for a preset reason plus optional details; Ban also asks for a duration. **Restore** appears while a post is auto-hidden. The same actions exist as `/mod`.
 
-`/setup modrole` grants those buttons, `/mod`, and **Submission ID**. `/setup`, `/announce`, `/filter`, `/sender`, and `/ownerpin` stay restricted (Manage Server, or owner-only for the PIN commands). If `/mod` is hidden from the role, allow it under Server Settings > Integrations. Keep the mod log staff-only: it contains the full text and any image.
+`/clearwarn user:|user_id: [warning:W-0042|all] [reason:]` (server owner only, asks for the owner PIN) lifts warnings (or, from its pick list, a posting ban) and DMs the user. Without `warning` it shows a private pick list. It is owner-only because a named user's warnings can be matched to mod-log entries.
+
+`/setup modrole` grants those buttons, `/mod`, and **Submission ID**. `/setup`, `/announce`, `/filter`, `/sender`, `/clearwarn`, and `/ownerpin` stay restricted (Manage Server, or owner-only for the PIN commands). If `/mod` is hidden from the role, allow it under Server Settings > Integrations. Keep the mod log staff-only: it contains the full text and any image.
 
 `/setup options approval:true` holds new posts in the mod log with **Approve** / **Reject** until a moderator acts. The public number is assigned on approval. Default is off (post first, moderate after), which matches the guide. Filter holds use the same queue.
 

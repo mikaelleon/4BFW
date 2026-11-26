@@ -1,5 +1,5 @@
 // Bulk-delete helpers for /cleardms and /clearchannels. Both only ever delete messages written by this bot.
-import { PermissionFlagsBits } from 'discord.js';
+import { MessageFlags, PermissionFlagsBits } from 'discord.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BULK_MAX_AGE = 14 * 86_400_000 - 60_000; // Discord refuses bulk deletes of messages older than 14 days
@@ -14,6 +14,18 @@ export async function withClearLock(guildId, fn) {
     return await fn();
   } finally {
     running.delete(guildId);
+  }
+}
+
+/**
+ * Show a finished job's result as a dismissable (ephemeral) message where the command was used.
+ * Discord only allows that for 15 minutes after the command, so a longer job falls back to a DM.
+ */
+export async function reportResult(interaction, content) {
+  try {
+    await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
+  } catch {
+    await interaction.user.send(content).catch((err) => console.error('Could not deliver a clear result:', err.message));
   }
 }
 
