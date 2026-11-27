@@ -4,20 +4,20 @@ import {
   ApplicationIntegrationType,
   PermissionFlagsBits,
   ChannelType,
-  EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
 import * as db from '../db.js';
 import { resolveGuild } from '../lib/context.js';
-import { COLOR, anonRef } from '../lib/format.js';
+import { anonRef } from '../lib/format.js';
 import { postComponents, refreshSticky, removeSticky, resetCounterSafely } from '../lib/confession.js';
 import { runDoctor } from '../lib/doctor.js';
 import { clockText, hasQuietHours, parseClock } from '../lib/hours.js';
 import { releaseScheduled } from '../lib/confession.js';
 import { THREAD_PERMS } from '../lib/threads.js';
-import { ensureOwnerPin, hasPin } from '../lib/owner-pin.js';
+import { ensureOwnerPin } from '../lib/owner-pin.js';
 import { highlightTimers } from '../lib/highlights.js';
 import { tagChoices, tagText } from '../lib/tags.js';
+import { settingsEmbed } from '../lib/settings-view.js';
 
 const serverOpt = (s) =>
   s.addStringOption((o) => o.setName('server').setDescription('Which server (only needed in DMs)').setAutocomplete(true));
@@ -513,53 +513,6 @@ export default {
     }
 
     // view
-    const c = cfg ?? {};
-    const routes = db.listTagChannels(guild.id);
-    const ruleCount = db.listFilterRules(guild.id).length;
-    const filterSummary =
-      ruleCount || c.block_invites || c.block_links
-        ? `${ruleCount} rule${ruleCount === 1 ? '' : 's'}${c.block_invites ? ', invites blocked' : ''}${c.block_links ? ', links blocked' : ''} → ${c.filter_action === 'hold' ? 'hold' : 'reject'}`
-        : 'Off';
-    const topicValue = routes.length
-      ? routes.map((r) => `${tagText(r.tag) ?? r.tag} → <#${r.channel_id}>`).join('\n').slice(0, 1000)
-      : 'None (everything goes to the main channel)';
-    const highlight =
-      c.highlight_channel_id && c.highlight_period && c.highlight_period !== 'off'
-        ? `${{ daily: 'Daily', weekly: 'Weekly', both: 'Daily + weekly' }[c.highlight_period]} in <#${c.highlight_channel_id}>`
-        : 'Off';
-    const embed = new EmbedBuilder()
-      .setColor(COLOR)
-      .setTitle(`Settings for ${guild.name}`)
-      .addFields(
-        { name: 'Submissions channel', value: c.channel_id ? `<#${c.channel_id}>` : 'Not set', inline: true },
-        { name: 'Mod log', value: c.log_channel_id ? `<#${c.log_channel_id}>` : 'Not set', inline: true },
-        { name: 'Guide role', value: c.role_id ? `<@&${c.role_id}>` : 'Not set', inline: true },
-        { name: 'Online notice role', value: c.online_role_id ? `<@&${c.online_role_id}>` : 'Not set', inline: true },
-        { name: 'Moderator role', value: c.mod_role_id ? `<@&${c.mod_role_id}>` : 'Not set', inline: true },
-        { name: 'Cooldown', value: `${c.cooldown ?? 30}s`, inline: true },
-        { name: 'Minimum time in server', value: c.min_join_days > 0 ? `${c.min_join_days} days` : 'Off', inline: true },
-        { name: 'Minimum account age', value: c.min_account_days > 0 ? `${c.min_account_days} days` : 'Off', inline: true },
-        { name: 'Daily post cap', value: c.daily_cap > 0 ? `${c.daily_cap} per 24 h` : 'Off', inline: true },
-        { name: 'Repost blocker', value: c.dup_hours > 0 ? `Same text within ${c.dup_hours} h` : 'Off', inline: true },
-        { name: 'Warn limit', value: `${c.warn_limit ?? 3}`, inline: true },
-        { name: 'Warning expiry', value: c.warn_expiry_days > 0 ? `${c.warn_expiry_days} days` : 'Never', inline: true },
-        { name: 'Approval queue', value: c.approval_mode ? 'On (posts wait for a moderator)' : 'Off (post first, moderate after)', inline: true },
-        { name: 'Auto-filter', value: filterSummary, inline: true },
-        { name: 'Poll length', value: c.poll_hours > 0 ? `${c.poll_hours} h` : 'Until closed', inline: true },
-        { name: 'Featured channel', value: c.featured_channel_id ? `<#${c.featured_channel_id}> (${c.featured_threshold} likes)` : 'Off', inline: true },
-        { name: 'Self-delete window', value: c.self_delete_minutes > 0 ? `${c.self_delete_minutes} min` : 'Off', inline: true },
-        { name: 'Data retention', value: c.retention_days > 0 ? `${c.retention_days} days` : 'Keep forever', inline: true },
-        { name: 'Report limit', value: c.report_limit > 0 ? `${c.report_limit} (auto-hide)` : 'Off (no auto-hide)', inline: true },
-        { name: 'Confession of the day / week', value: highlight, inline: true },
-        {
-          name: 'Threads · quiet hours',
-          value: `Reply threads ${c.auto_thread ? 'on' : 'off'} · ${hasQuietHours(c) ? `quiet ${clockText(c.quiet_start)} to ${clockText(c.quiet_end)} (${c.quiet_hold ? 'hold' : 'closed'})` : 'no quiet hours'}`,
-        },
-        { name: 'Topic channels', value: topicValue },
-        { name: 'Welcome DM', value: c.welcome_dm ? 'On' : 'Off', inline: true },
-        { name: 'Owner PIN', value: hasPin(guild.id) ? 'Set' : 'Not set (owner: run /ownerpin)', inline: true },
-        { name: 'Next public number', value: anonRef((c.counter ?? 0) + 1), inline: true },
-      );
-    return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+    return interaction.editReply({ embeds: [settingsEmbed(guild)], allowedMentions: { parse: [] } });
   },
 };
