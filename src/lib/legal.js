@@ -158,10 +158,8 @@ const WHO = {
   heading: 'Who sees what',
   post: { title: 'Anonymous #012', text: 'Whoever keeps leaving kind notes on the library tables, thank you. Finals week needed it.' },
   viewers: [
-    { name: 'Member', sender: false, answer: 'Sees the post without your name or picture. What you write or upload can still give you away.' },
-    { name: 'Moderator', sender: false, answer: 'Sees the text and images, but no sender ID in the mod log.' },
-    { name: 'Server owner', sender: true, answer: 'Can look up who sent the post, using a private PIN.' },
-    { name: 'Bot host', sender: true, answer: 'Has access to the database, where your Discord ID is stored with your submissions.' },
+    { name: 'Member', answer: 'Sees the post without your name or picture. What you write or upload can still give you away.' },
+    { name: 'Moderator', answer: 'Sees the text and images, but no sender ID in the mod log.' },
   ],
 };
 
