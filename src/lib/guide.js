@@ -6,14 +6,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const running = new Set();
 
 export const GUIDE_PREFIX = 'guide';
-const PAGES = ['Overview', 'How to Use', 'Rules (P1)', 'Rules (P2)', 'Terms of Use', 'Privacy Policy'];
-export const RULES_PAGE = 2; // index of "Rules (P1)", where the "Read the rules" button in warning DMs lands
+const PAGES = ['Overview', 'How to Use', 'Rules', 'Terms of Use', 'Privacy Policy'];
+export const RULES_PAGE = 2; // index of "Rules", where the "Read the rules" button in warning DMs lands
 
-function overviewPage() {
+function overviewPage({ cfg }) {
+  const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
   return [
+    '# OVERVIEW',
+    '',
     '**STFW** · *noun* `/ˌɛs-ti-ɛf-ˈdʌbəl-ju/`',
     '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
-    '*When you\'re told to STFU, let the wall do the talking instead.*',
+    "*When you're told to STFU, let the wall do the talking instead.*",
+    '',
+    '**Why does this exist?** Many students have something to say but hesitate to say it openly. The bot gives everyone a safe, simple space to speak up.',
+    '',
+    'Confessions, crushes, shoutouts, questions, and appreciation posts are all welcome. Honest feedback about student life on campus, including constructive criticism of professors, is also allowed within the guidelines.',
+    '',
+    '**What do we stand for?** The page supports freedom of expression with responsibility and respect. Every post goes through moderation to keep the space safe for everyone.',
+    '',
+    `**Where do posts appear?** Every submission is posted in ${where}.`,
   ].join('\n');
 }
 
@@ -60,18 +71,48 @@ function howToPage({ cfg }) {
   ].join('\n');
 }
 
-// The server's official rules, as [title, text]. Each page renders them as "1. **Title.** text".
+// The server's official rules, as [title, points].
 const RULES = [
-  [`Freedom of expression`, `Every student is free to share confessions, opinions, and experiences through this bot. Speak honestly, but remember that *freedom of speech comes with responsibility*.`],
-  [`Welcome content`, `Confessions, crushes, shoutouts, thoughts, questions, and appreciation posts are all *encouraged*. Honest feedback about student life on campus is also welcome.`],
-  [`Respect for others`, `Harassment, hate speech, bullying, threats, and discriminatory attacks are __not allowed__. This includes naming someone to shame or humiliate them, and it applies *equally* to students, faculty, administrators, and any other identifiable person.`],
-  [`Safe content`, `Explicit, illegal, or dangerous content is __not allowed__. Anything that puts a person's *safety or privacy* at risk is also prohibited.`],
-  [`No spam`, `Spam, advertisements, and repeated duplicate posts are __not allowed__. Submit your confession *once*.`],
-  [`Criticizing professors`, `Students may voice opinions, experiences, and concerns about teaching methods, grading, classroom management, academic requirements, and professional conduct. Constructive criticism and strongly worded negative feedback are allowed even when a faculty member is identified, as long as the post stays on *relevant academic or professional matters*.`],
-  [`Serious allegations`, `Serious claims must be presented *responsibly and truthfully*. Posts that raise concerns about potentially defamatory statements may be reviewed.`],
-  [`Moderation`, `Posts are moderated *after* they are posted, based on their content and context. Posts that violate these guidelines may be __deleted__, and their authors may be __warned or banned__ from posting without prior notice.`],
-  [`Responsibility and liability`, `Each user is *solely responsible* for what they submit, and opinions in posts belong to their authors, not the page, its admins, or the developer. The developer will not be liable for any conflict, dispute, or damage that arises from submitted content.`],
-  [`Acceptance of rules`, `Submitting a confession means you have read and agreed to these guidelines. The admins may update these rules at any time, so please *review them regularly*.`],
+  [`Freedom of expression`, [
+    `Every student is free to share confessions, opinions, and experiences through this bot.`,
+    `Speak honestly, but remember that *freedom of speech comes with responsibility.*`,
+  ]],
+  [`Welcome content`, [
+    `Confessions, crushes, shoutouts, thoughts, questions, and appreciation posts are all *encouraged.*`,
+    `Honest feedback about student life on campus is also welcome.`,
+  ]],
+  [`Respect for others`, [
+    `Harassment, hate speech, bullying, threats, and discriminatory attacks are __not allowed.__`,
+    `This includes naming someone to shame or humiliate them, and it applies equally to students, faculty, administrators, and any other identifiable person.`,
+  ]],
+  [`Safe content`, [
+    `Explicit, illegal, or dangerous content is __not allowed.__`,
+    `Anything that puts a person's *safety or privacy* at risk is also prohibited.`,
+  ]],
+  [`No spam`, [
+    `Spam, advertisements, and repeated duplicate posts are __not allowed.__`,
+    `Submit your confession *once.*`,
+  ]],
+  [`Criticizing professors`, [
+    `Students may voice opinions, experiences, and concerns about teaching methods, grading, classroom management, academic requirements, and professional conduct.`,
+    `Constructive criticism and strongly worded negative feedback are allowed even when a faculty member is identified, as long as the post stays on *relevant academic or professional matters.*`,
+  ]],
+  [`Serious allegations`, [
+    `Serious claims must be presented *responsibly and truthfully.*`,
+    `Posts that raise concerns about potentially defamatory statements may be reviewed.`,
+  ]],
+  [`Moderation`, [
+    `Posts are moderated *after* they are posted, based on their content and context.`,
+    `Posts that violate these guidelines may be __deleted__, and their authors may be __warned or banned__ from posting without prior notice.`,
+  ]],
+  [`Responsibility and liability`, [
+    `Each user is *solely responsible* for what they submit, and opinions in posts belong to their authors, not the page, its admins, or the developer.`,
+    `The developer will not be liable for any conflict, dispute, or damage that arises from submitted content.`,
+  ]],
+  [`Acceptance of rules`, [
+    `Submitting a confession means you have read and agreed to these guidelines.`,
+    `The admins may update these rules at any time, so please *review them regularly.*`,
+  ]],
 ];
 
 const TERMS = [
@@ -92,20 +133,23 @@ const PRIVACY = [
   [`Third parties`, `This bot runs on Discord and is subject to Discord's own Terms and Privacy Policy.`],
 ];
 
+/** All rules on one page: a heading per rule with its points quoted underneath, no blank lines. */
+const rulesPage = () =>
+  ['# RULES', ...RULES.map(([title, points], i) => [`### ${i + 1}. ${title}.`, ...points.map((p) => `> - ${p}`)].join('\n'))].join('\n');
+
 /** One numbered paragraph per item, blank line between: "1. **Short headline.** The explanation." */
-const listPage = (heading, items, start = 1) => () =>
-  [`# ${heading}`, '', items.map(([title, text], i) => `${start + i}. **${title}.** ${text}`).join('\n\n')].join('\n');
+const listPage = (heading, items) => () =>
+  [`# ${heading}`, '', items.map(([title, text], i) => `${i + 1}. **${title}.** ${text}`).join('\n\n')].join('\n');
 
 const BUILDERS = [
   overviewPage,
   howToPage,
-  listPage('RULES (P1)', RULES.slice(0, 5), 1),
-  listPage('RULES (P2)', RULES.slice(5), 6),
+  rulesPage,
   listPage('TERMS OF USE', TERMS),
   listPage('PRIVACY POLICY', PRIVACY),
 ];
 
-/** Navigation buttons: one per page, three to a row so six pages split evenly (Discord allows five per row). */
+/** Navigation buttons: one per page, three to a row so the pages split over two rows (Discord allows five per row). */
 function navRows(guildId, page) {
   const buttons = PAGES.map((label, i) =>
     new ButtonBuilder()
@@ -119,7 +163,7 @@ function navRows(guildId, page) {
   return rows;
 }
 
-/** One page of the guide (overview, how to use, rules P1/P2, terms of use, privacy policy) plus its buttons. */
+/** One page of the guide (overview, how to use, rules, terms of use, privacy policy) plus its buttons. */
 export function guidePayload(guild, page = 0) {
   const index = Number.isInteger(page) && page >= 0 && page < PAGES.length ? page : 0;
   const cfg = db.getGuild(guild.id);
