@@ -45,7 +45,7 @@ export default {
       return interaction.editReply('Pick at least one: `submissions`, `modlog` or `backup`.');
     }
 
-    const cfg = db.getGuild(guild.id);
+    const cfg = await db.getGuild(guild.id);
     const ids = {
       submissions: cfg?.channel_id,
       modlog: cfg?.log_channel_id,
@@ -106,7 +106,7 @@ export default {
         if (isBackupChannel(job)) {
           // Upload first: old backups are only deleted once a newer one is safely in the channel.
           try {
-            const fresh = await runBackup(interaction.client, { force: true });
+            const fresh = await runBackup(interaction.client);
             if (!fresh) throw new Error('backups are off');
             before = fresh.messageId;
             lines.push(`Fresh backup uploaded.${fresh.dropped ? ` ${fresh.dropped} image(s) were left out to fit the upload limit.` : ''}`);

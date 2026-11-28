@@ -1,15 +1,14 @@
 # Moving the database to Supabase
 
-**Where things stand:** the repository has the Postgres schema and the tools to fill it. The bot itself still reads and
-writes SQLite (`data/confessions.db`). Setting `DATABASE_URL` changes nothing for the running bot until `src/db.js` and
-its callers are rewritten for Postgres. Do parts 1 to 4 now, and part 5 only after that rewrite.
+The bot stores everything in Postgres. If a server still runs the older SQLite version, do parts 1 to 4 first, then the
+cut-over in part 5. A brand new installation only needs parts 1 to 3 and the Render settings.
 
 | File | What it is |
 |---|---|
-| `supabase/migrations/*.sql` | The Postgres schema, one file per change |
-| `scripts/migrate.js` | `npm run db:migrate` applies new files, `npm run db:status` lists them |
-| `scripts/copy-to-postgres.js` | `npm run db:copy` fills an empty Postgres database from SQLite |
-| `scripts/pg-client.js` | The connection, with certificate checking |
+| `supabase/migrations/*.sql` | The database schema, one file per change |
+| `npm run db:migrate`, `npm run db:status` | Apply new schema files, or list them |
+| `npm run db:pull`, `npm run db:copy` | One time: download the old SQLite backup and copy it into Postgres |
+| `npm run db:restore` | Put a Postgres backup into an empty database |
 
 ## 1. Create the Supabase project
 
@@ -57,18 +56,17 @@ Every file should show `applied`. In Supabase's **Table Editor** the tables appe
 
 ## 4. Rehearse the data copy
 
-This checks that your real data fits the new schema, and keeps nothing.
+This checks that your real data fits the new schema, and keeps nothing. Do it while the old bot is still running.
 
 1. Move the local `data` folder somewhere else if it exists (for example rename it to `data-dev`).
 2. Put the **same** `DISCORD_TOKEN`, `BACKUP_CHANNEL_ID` and `BACKUP_PASSPHRASE` as Render into `.env`.
-3. Download the newest backup. This does not start the bot:
+3. Download the newest SQLite backup. This does not start the bot:
 
 ```powershell
 npm run db:pull
 ```
 
-It prints `Backup restore: restored ...`. No output means a backup setting is missing or `data/confessions.db` already
-exists. Do not run `npm start` with the live token: that is a second copy of the bot.
+It prints `Backup restore: restored ...`. Do not run `npm start` with the live token: that is a second copy of the bot.
 
 4. Run the dry run:
 
@@ -85,45 +83,88 @@ hold them. Copy from the database file on the server instead: `npm run db:copy -
 
 ## Connecting Render
 
-Render needs no integration or add-on: the bot only needs two settings. You can add them now or at cut-over.
+Render needs no integration or add-on: the bot only needs two settings. **The new version does not start without them.**
 
 1. Render service > **Environment** > **Secret Files** > add the certificate, using the same file name.
 2. **Environment Variables** > add `DATABASE_URL` (same value as in `.env`).
 3. Add `DATABASE_CA_CERT` = `/etc/secrets/<certificate file name>`.
-4. Save. Render redeploys, and the bot keeps using SQLite.
 
 Supabase accepts connections from any address unless you add **Network Restrictions**.
 
-## 5. Cut-over (after the code rewrite)
+## 5. Cut-over
 
-1. Run `/mod pause` with mode `closed`, so nothing new is saved. Wait a minute and check a fresh backup appeared.
-2. Suspend the Render service.
-3. Repeat part 4, then run the copy without `--dry-run`:
+Pick a quiet time. The bot is offline for part of it.
+
+1. While the old bot runs, run `/mod pause` with mode `closed`. Wait a minute and check that a fresh backup appeared in
+   the backup channel.
+2. **Suspend** the Render service, so nothing changes any more and the new code cannot deploy early.
+3. Delete the local `data` folder if there is one, then run these one at a time. Stop if one fails:
+
+```powershell
+npm run db:migrate
+```
+
+```powershell
+npm run db:pull
+```
+
+```powershell
+npm run db:copy -- --dry-run
+```
 
 ```powershell
 npm run db:copy
 ```
 
-4. Deploy the Postgres version of the bot with the two settings above, and resume the service.
-5. Check `/setup view`, post a test submission, and run `/mod resume`.
-6. Keep the last SQLite backup until you are sure. To go back, deploy the previous version: it restores from the backup
-   channel. Posts made after the cut-over would not be in it.
-7. Delete the local `data` folder.
+4. Add the Render settings above, if you have not yet.
+5. Merge the Postgres version into the branch Render deploys, then resume the service and deploy it.
+6. Register the changed slash commands (`/setup options` has a new `image_days` option):
 
-Before cut-over, also decide:
+```powershell
+npm run deploy
+```
 
-- **Backups.** The free plan has none, and the Discord backup only handles SQLite. Plan a scheduled `pg_dump`.
-- **Space.** The free plan holds 500 MB, and images are stored in the database.
-- **Privacy page.** Update the backup and hosting wording in `src/lib/legal.js`.
+7. Check `/setup doctor` and `/setup view`, then `/mod resume`, and post a test submission.
+8. Delete the local `data` folder. Keep the last SQLite backup in the channel until you are sure.
+
+**Going back:** deploy the previous version again. It reads the SQLite backup from the channel. Anything posted after the
+cut-over is not in it. Do not use `/clearchannels backup` until you no longer need to go back: it removes older backups.
+
+## Backups
+
+With `BACKUP_CHANNEL_ID` and `BACKUP_PASSPHRASE` set, the bot uploads an encrypted copy of the database once a day and
+keeps the newest 10. Images are left out as needed to fit Discord's upload limit. Up to a day of changes can be lost, and
+the backup channel is the only copy on the free plan. Reading the database for a backup counts toward Supabase's
+monthly data transfer.
+
+To restore into a new, empty database: set `DATABASE_URL` to it, then:
+
+```powershell
+npm run db:migrate
+```
+
+```powershell
+npm run db:restore -- --dry-run
+```
+
+```powershell
+npm run db:restore
+```
+
+## Staying inside the free plan
+
+- The free plan holds 500 MB, and images are stored in the database. `/setup options image_days:90` deletes stored
+  images of finished posts older than 90 days and keeps every other record.
+- Supabase pauses a free project after a week without activity. A running bot queries it every minute; if the bot was
+  off for longer, resume the project in the dashboard.
+- Put the database near the Render service. Every command waits for it, and Discord expects an answer within 3 seconds.
 
 ## Changing the schema later
 
-Add a new file in `supabase/migrations/` named `YYYYMMDDHHMMSS_what_changed.sql`, then run `npm run db:migrate`. Never
-edit a file that has been applied. Enable row level security on any new table:
+Add a new file in `supabase/migrations/` named `YYYYMMDDHHMMSS_what_changed.sql`, then run `npm run db:migrate` before
+deploying the code that needs it. The bot refuses to start while a file is not applied. Never edit a file that has been
+applied. Enable row level security on any new table, and add the table to `src/lib/tables.js`:
 
 ```sql
 ALTER TABLE public.my_table ENABLE ROW LEVEL SECURITY;
 ```
-
-Until the rewrite is done, a schema change in `src/db.js` also needs a migration here, and the new `user_version` and
-table list in `scripts/copy-to-postgres.js`.

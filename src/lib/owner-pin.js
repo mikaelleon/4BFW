@@ -49,8 +49,8 @@ function matches(pin, stored) {
   return timingSafeEqual(expected, actual);
 }
 
-export const hasPin = (guildId) => Boolean(db.getGuild(guildId)?.owner_pin);
-const savePin = (guildId, pin) => db.updateGuild(guildId, { owner_pin: hashPin(pin) });
+export const hasPin = async (guildId) => Boolean((await db.getGuild(guildId))?.owner_pin);
+const savePin = async (guildId, pin) => await db.updateGuild(guildId, { owner_pin: hashPin(pin) });
 
 /** Three wrong PINs lock the lookups for ten minutes. */
 function lockedFor(guildId) {
@@ -58,8 +58,11 @@ function lockedFor(guildId) {
   return f?.lockedUntil > Date.now() ? Math.ceil((f.lockedUntil - Date.now()) / 60_000) : 0;
 }
 
-function checkPin(guildId, pin) {
-  if (!matches(pin, db.getGuild(guildId)?.owner_pin)) {
+async function checkPin(guildId, pin) {
+  const stored = (await db.getGuild(guildId))?.owner_pin;
+  // Checked again after the wait: guesses sent all at once must not get past the lock. No await from here on.
+  if (lockedFor(guildId)) return false;
+  if (!matches(pin, stored)) {
     const f = failures.get(guildId) ?? { count: 0, lockedUntil: 0 };
     f.count += 1;
     if (f.count >= MAX_FAILS) {
@@ -103,10 +106,10 @@ async function dmPin(guild, pin, reason) {
  * 'sent' | 'exists' | 'dm_failed' (nothing is saved on failure, so the owner can pick one with /ownerpin).
  */
 export async function ensureOwnerPin(guild) {
-  if (hasPin(guild.id)) return 'exists';
+  if (await hasPin(guild.id)) return 'exists';
   const pin = generatePin();
   if (!(await dmPin(guild, pin, 'Made when this server was set up.'))) return 'dm_failed';
-  savePin(guild.id, pin);
+  await savePin(guild.id, pin);
   return 'sent';
 }
 
@@ -124,11 +127,11 @@ const pinInput = (id, label, description, required) =>
  * Pop-up asking for the PIN (and a new one for kind "change"). Cancelled if not sent within 60 seconds.
  * Kind "action" runs `extra.run(modalInteraction, guild)` once the PIN checks out.
  */
-export function promptPin(interaction, kind, extra = {}) {
+export async function promptPin(interaction, kind, extra = {}) {
   const token = randomBytes(6).toString('hex');
   pendingPrompts.set(token, { userId: interaction.user.id, guildId: interaction.guildId, kind, ...extra, expires: Date.now() + PIN_WINDOW_MS });
   const modal = new ModalBuilder().setCustomId(`${PIN_MODAL_PREFIX}:${token}`).setTitle(kind === 'change' ? 'Change owner PIN' : 'Owner PIN');
-  if (kind !== 'change' || hasPin(interaction.guildId)) {
+  if (kind !== 'change' || await hasPin(interaction.guildId)) {
     modal.addLabelComponents(pinInput('pin', 'Your 6-digit PIN', 'You have 60 seconds. After that the request is cancelled.', true));
   }
   if (kind === 'change') {
@@ -151,18 +154,18 @@ export async function handlePinModal(interaction) {
   if (!(await isOwner(interaction))) return say('Only the server owner can do this.');
 
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
-  const gated = prompt.kind !== 'change' || hasPin(guild.id);
+  const gated = prompt.kind !== 'change' || await hasPin(guild.id);
   if (gated) {
     const wait = lockedFor(guild.id);
     if (wait) return say(`Too many wrong PINs. Try again in ${wait} minute${wait === 1 ? '' : 's'}.`);
     const typed = interaction.fields.getTextInputValue('pin').trim();
-    if (!isValidPin(typed) || !checkPin(guild.id, typed)) return say('Wrong PIN. The request was cancelled.');
+    if (!isValidPin(typed) || !await checkPin(guild.id, typed)) return say('Wrong PIN. The request was cancelled.');
   }
 
   if (prompt.kind === 'action') return prompt.run(interaction, guild);
 
   if (prompt.kind === 'sender') {
-    const row = db.getConfessionBySubId(guild.id, prompt.subId);
+    const row = await db.getConfessionBySubId(guild.id, prompt.subId);
     if (!row) return say(`There is no submission with ID \`${prompt.subId}\` in this server.`);
     const embed = new EmbedBuilder()
       .setColor(COLOR)
@@ -182,7 +185,7 @@ export async function handlePinModal(interaction) {
   if (!wanted && !(await dmPin(guild, pin, 'Made at your request.'))) {
     return say('I could not DM you (are your DMs closed?). Nothing was changed. Open your DMs, or type a PIN yourself.');
   }
-  savePin(guild.id, pin);
+  await savePin(guild.id, pin);
   return say(wanted ? 'Your new PIN is saved.' : 'Done. The new PIN is in your DMs.');
 }
 

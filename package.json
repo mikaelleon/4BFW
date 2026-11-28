@@ -10,7 +10,8 @@
     "db:pull": "node src/restore.js",
     "db:migrate": "node scripts/migrate.js",
     "db:status": "node scripts/migrate.js --status",
-    "db:copy": "node scripts/copy-to-postgres.js"
+    "db:copy": "node scripts/copy-to-postgres.js",
+    "db:restore": "node scripts/restore-backup.js"
   },
   "engines": {
     "node": ">=22.13"

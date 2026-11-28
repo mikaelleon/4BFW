@@ -50,9 +50,11 @@ const short = (s) => (s.length > 40 ? `${s.slice(0, 39)}…` : s);
  * { kind, detail, userMessage }: `detail` is for moderators (names the rule), `userMessage` is for the author
  * and stays vague on purpose so nobody can probe the list.
  */
-export function checkFilters(guildId, texts, { rules = db.listFilterRules(guildId), cfg = db.getGuild(guildId) } = {}) {
+export async function checkFilters(guildId, texts, options = {}) {
   const hay = texts.filter(Boolean).join('\n');
   if (!hay) return null;
+  const rules = options.rules ?? (await db.listFilterRules(guildId));
+  const cfg = options.cfg ?? (await db.getGuild(guildId));
   const norm = normalize(hay);
   if (cfg?.block_invites && INVITE.test(norm)) {
     return { kind: 'invite', detail: 'Discord invite link', userMessage: 'Invite links are not allowed here. Remove it and try again.' };

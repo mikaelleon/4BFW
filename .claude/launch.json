@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-pages",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--input-type=module",
+        "-e",
+        "await import('dotenv/config'); const { default: http } = await import('node:http'); const { handleHttp } = await import('./src/lib/legal.js'); http.createServer(handleHttp).listen(4599);"
+      ],
+      "port": 4599
+    }
+  ]
+}

@@ -14,6 +14,6 @@ export default {
     if (!(await isOwner(interaction))) {
       return interaction.reply({ content: 'Only the server owner can change the PIN.', flags: MessageFlags.Ephemeral });
     }
-    return promptPin(interaction, 'change');
+    return await promptPin(interaction, 'change');
   },
 };

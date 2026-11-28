@@ -13,13 +13,13 @@ export const REASON_PREFIX = 'modreason'; // modal: "modreason:<action>:<submiss
 const TITLES = { warn: 'Warn author', delete: 'Delete submission', ban: 'Ban author' };
 const EPHEMERAL = MessageFlags.Ephemeral;
 
-function guard(interaction) {
-  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId))) {
+async function guard(interaction) {
+  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, await db.getGuild(interaction.guildId))) {
     interaction.reply({ content: 'Only moderators can use these controls.', flags: EPHEMERAL }).catch(() => {});
     return null;
   }
   const [, action, idText] = interaction.customId.split(':');
-  const row = db.getConfession(interaction.guildId, Number(idText));
+  const row = await db.getConfession(interaction.guildId, Number(idText));
   if (!row) {
     interaction.reply({ content: 'That submission no longer exists.', flags: EPHEMERAL }).catch(() => {});
     return null;
@@ -29,15 +29,15 @@ function guard(interaction) {
 
 /** Refresh the buttons on the log entry (Delete greys out, Ban/Unban swaps) and tell the moderator what happened. */
 async function finish(interaction, row, text) {
-  const fresh = db.getConfession(interaction.guildId, row.id);
-  const banned = Boolean(db.getBan(interaction.guildId, fresh.author_key));
+  const fresh = await db.getConfession(interaction.guildId, row.id);
+  const banned = Boolean(await db.getBan(interaction.guildId, fresh.author_key));
   await interaction.editReply({ components: [controlsRow(fresh, banned)] }).catch(() => {});
   await interaction.followUp({ content: text, flags: EPHEMERAL }).catch(() => {});
 }
 
 /** A button was pressed: Unban acts right away, the others ask for an optional reason first. */
 export async function handleControlButton(interaction) {
-  const found = guard(interaction);
+  const found = await guard(interaction);
   if (!found) return;
   const { action, row } = found;
 
@@ -81,7 +81,7 @@ export async function handleControlButton(interaction) {
 
 /** The reason modal was submitted: run the action. */
 export async function handleReasonModal(interaction) {
-  const found = guard(interaction);
+  const found = await guard(interaction);
   if (!found) return;
   const { action, row } = found;
 

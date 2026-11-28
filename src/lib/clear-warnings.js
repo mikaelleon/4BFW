@@ -28,18 +28,18 @@ export async function liftForUser(client, guild, userId, what, actor, reason = n
   const fields = [];
 
   if (what === 'ban') {
-    if (!db.unbanUser(guild.id, userId)) return 'That user is not banned.';
-    const appeal = db.latestBanAppeal(guild.id, userId);
-    if (appeal?.status === 'open') db.resolveBanAppeal(appeal.id, 'lifted', actor.id);
+    if (!await db.unbanUser(guild.id, userId)) return 'That user is not banned.';
+    const appeal = await db.latestBanAppeal(guild.id, userId);
+    if (appeal?.status === 'open') await db.resolveBanAppeal(appeal.id, 'lifted', actor.id);
     title = 'Ban lifted';
     lifted = 'your posting ban. You can post again';
   } else {
-    const all = db.listWarnings(guild.id, userId); // only this user's, so a code belonging to someone else is "not found"
+    const all = await db.listWarnings(guild.id, userId); // only this user's, so a code belonging to someone else is "not found"
     const targets = what === 'all' ? all : all.filter((w) => w.id === what);
     if (!targets.length) return what === 'all' ? 'That user has no warnings.' : `That user has no warning \`${warningCode(what)}\`.`;
     for (const w of targets) {
-      if (db.getAppeal(w.id)?.status === 'open') db.resolveAppeal(w.id, 'overturned', actor.id);
-      db.deleteWarning(w.id);
+      if ((await db.getAppeal(w.id))?.status === 'open') await db.resolveAppeal(w.id, 'overturned', actor.id);
+      await db.deleteWarning(w.id);
     }
     const codes = targets.map((w) => warningCode(w.id)).join(', ');
     title = targets.length === 1 ? 'Warning cleared' : 'Warnings cleared';
@@ -47,10 +47,10 @@ export async function liftForUser(client, guild, userId, what, actor, reason = n
     fields.push({ name: targets.length === 1 ? 'Warning ID' : 'Warning IDs', value: clip(codes, 1000) });
   }
 
-  const cfg = db.getGuild(guild.id);
-  const banned = Boolean(db.getBan(guild.id, userId));
+  const cfg = await db.getGuild(guild.id);
+  const banned = Boolean(await db.getBan(guild.id, userId));
   const standing = [
-    what === 'ban' ? null : `Active warnings: **${db.countWarnings(guild.id, userId)}/${cfg.warn_limit}**`,
+    what === 'ban' ? null : `Active warnings: **${await db.countWarnings(guild.id, userId)}/${cfg.warn_limit}**`,
     banned ? 'Your posting ban is still in place.' : null,
   ].filter(Boolean);
   const dmed = await dmUser(
@@ -70,9 +70,9 @@ export async function liftForUser(client, guild, userId, what, actor, reason = n
 }
 
 /** The private pick list: each warning, "clear all", the ban if there is one, and a Dismiss button. */
-export function clearPanel(guild, userId, note = null) {
-  const warnings = db.listWarnings(guild.id, userId);
-  const ban = db.getBan(guild.id, userId);
+export async function clearPanel(guild, userId, note = null) {
+  const warnings = await db.listWarnings(guild.id, userId);
+  const ban = await db.getBan(guild.id, userId);
   const options = [];
   if (warnings.length) options.push({ label: `Clear all warnings (${warnings.length})`, value: 'all', emoji: '🧹' });
   if (ban) options.push({ label: 'Lift posting ban', description: clip(ban.reason ?? 'No reason given', 100), value: 'ban', emoji: '🔓' });
@@ -115,5 +115,5 @@ export async function handleClearWarnComponent(interaction) {
   const value = interaction.values[0];
   const what = value === 'all' || value === 'ban' ? value : Number(value.slice(1));
   const note = await liftForUser(interaction.client, guild, userId, what, interaction.user, reasons.get(`${interaction.user.id}:${userId}`));
-  return interaction.editReply(clearPanel(guild, userId, note));
+  return interaction.editReply(await clearPanel(guild, userId, note));
 }

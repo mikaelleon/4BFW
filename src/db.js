@@ -1,377 +1,28 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+// All database access. Postgres (Supabase): the schema lives in supabase/migrations, applied with `npm run db:migrate`.
+import { readdirSync } from 'node:fs';
 import { isKey, keyOf, secretFingerprint, userKey } from './lib/identity.js';
+import { all, closePool, get, lock, run, snapshotTransaction, transaction } from './pg.js';
 
-mkdirSync('data', { recursive: true });
-const db = new DatabaseSync('data/confessions.db');
+export { closePool };
 
-// Write hook: lets the backup job know the data changed, so a backup follows within seconds instead of on a timer.
-let writeListener = null;
-export function onWrite(fn) {
-  writeListener = fn;
-}
-const rawPrepare = db.prepare.bind(db);
-db.prepare = (sql) => {
-  const stmt = rawPrepare(sql);
-  if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) {
-    const rawRun = stmt.run.bind(stmt);
-    stmt.run = (...args) => {
-      const result = rawRun(...args);
-      writeListener?.();
-      return result;
-    };
-  }
-  return stmt;
-};
+/** Run `fn(query)` against one unchanging view of the database (for backups). */
+export const readSnapshot = (fn) => snapshotTransaction(fn);
 
-db.exec(`
-PRAGMA journal_mode = WAL;
-
-CREATE TABLE IF NOT EXISTS guilds (
-  guild_id       TEXT PRIMARY KEY,
-  channel_id     TEXT,
-  log_channel_id TEXT,
-  role_id        TEXT,
-  sticky_id      TEXT,
-  cooldown       INTEGER NOT NULL DEFAULT 30,
-  warn_limit     INTEGER NOT NULL DEFAULT 3,
-  welcome_dm     INTEGER NOT NULL DEFAULT 0,
-  counter        INTEGER NOT NULL DEFAULT 0
-);
-
--- id     = permanent, unique, admin-only (never reused, survives counter resets)
--- number = public "Anonymous #N" shown to everyone; admins can reset the counter
-CREATE TABLE IF NOT EXISTS confessions (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  guild_id   TEXT NOT NULL,
-  number     INTEGER NOT NULL,
-  author_id  TEXT NOT NULL,
-  channel_id TEXT,
-  message_id TEXT,
-  content    TEXT NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'posted',
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_conf_author ON confessions (guild_id, author_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_conf_message ON confessions (guild_id, message_id);
-
-CREATE TABLE IF NOT EXISTS warnings (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  guild_id          TEXT NOT NULL,
-  user_id           TEXT NOT NULL,
-  confession_id     INTEGER,
-  reason            TEXT,
-  created_at        INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS bans (
-  guild_id   TEXT NOT NULL,
-  user_id    TEXT NOT NULL,
-  reason     TEXT,
-  banned_by  TEXT,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (guild_id, user_id)
-);
-`);
-
-// One-time migration: the default cooldown dropped from 60s to 30s. Servers still on the old default move over;
-// anyone who set another value keeps it. user_version stops this re-running (and overriding later choices).
-let schemaVersion = db.prepare('PRAGMA user_version').get().user_version;
-if (schemaVersion < 1) {
-  db.exec('UPDATE guilds SET cooldown = 30 WHERE cooldown = 60; PRAGMA user_version = 1;');
-  schemaVersion = 1;
-}
-// v2: remember whether a confession carried an image (shown in the mod log).
-if (schemaVersion < 2) {
-  db.exec('ALTER TABLE confessions ADD COLUMN has_image INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 2;');
-  schemaVersion = 2;
-}
-// v3: optional moderator role that may use the mod-log buttons and /mod commands.
-if (schemaVersion < 3) {
-  db.exec('ALTER TABLE guilds ADD COLUMN mod_role_id TEXT; PRAGMA user_version = 3;');
-  schemaVersion = 3;
-}
-// v4: role that gets an "I'm online" DM when the bot starts, and when the last one went out (anti-spam on restarts).
-if (schemaVersion < 4) {
-  db.exec('ALTER TABLE guilds ADD COLUMN online_role_id TEXT; ALTER TABLE guilds ADD COLUMN online_notified_at INTEGER; PRAGMA user_version = 4;');
-  schemaVersion = 4;
-}
-// v5: keep each submission's image so the mod log can show it (also in later entries, after the post is deleted).
-if (schemaVersion < 5) {
-  db.exec(`CREATE TABLE IF NOT EXISTS confession_images (
-    confession_id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    data BLOB NOT NULL
-  ); PRAGMA user_version = 5;`);
-  schemaVersion = 5;
-}
-// v6: reports (anonymous: the reporter id is only used to count each person once), timed bans, warning expiry,
-// mod notes, and what a post looked like when it was published (needed to restore a post that was auto-hidden).
-if (schemaVersion < 6) {
-  db.exec(`
-    ALTER TABLE guilds ADD COLUMN report_limit INTEGER NOT NULL DEFAULT 3;
-    ALTER TABLE guilds ADD COLUMN warn_expiry_days INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE bans ADD COLUMN expires_at INTEGER;
-    ALTER TABLE confessions ADD COLUMN rendered TEXT;
-    ALTER TABLE confessions ADD COLUMN color INTEGER;
-    CREATE TABLE IF NOT EXISTS reports (
-      confession_id INTEGER NOT NULL,
-      reporter_id   TEXT NOT NULL,
-      reason        TEXT,
-      created_at    INTEGER NOT NULL,
-      PRIMARY KEY (confession_id, reporter_id)
-    );
-    CREATE TABLE IF NOT EXISTS mod_notes (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id      TEXT NOT NULL,
-      user_id       TEXT NOT NULL,
-      confession_id INTEGER,
-      note          TEXT NOT NULL,
-      moderator_id  TEXT NOT NULL,
-      created_at    INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_notes_user ON mod_notes (guild_id, user_id);
-    PRAGMA user_version = 6;
-  `);
-  schemaVersion = 6;
-}
-// v7: topic tags (+ per-tag channels), button reactions, polls, and "confession of the day/week" settings.
-if (schemaVersion < 7) {
-  db.exec(`
-    ALTER TABLE confessions ADD COLUMN tag TEXT;
-    ALTER TABLE confessions ADD COLUMN is_poll INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN highlight_channel_id TEXT;
-    ALTER TABLE guilds ADD COLUMN highlight_period TEXT NOT NULL DEFAULT 'off';
-    ALTER TABLE guilds ADD COLUMN highlight_daily_at INTEGER;
-    ALTER TABLE guilds ADD COLUMN highlight_weekly_at INTEGER;
-    CREATE TABLE IF NOT EXISTS tag_channels (
-      guild_id   TEXT NOT NULL,
-      tag        TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      PRIMARY KEY (guild_id, tag)
-    );
-    -- one reaction per person per post: kind is 'up' or 'down' (hearts were removed in v12)
-    CREATE TABLE IF NOT EXISTS reactions (
-      confession_id INTEGER NOT NULL,
-      user_id       TEXT NOT NULL,
-      kind          TEXT NOT NULL,
-      PRIMARY KEY (confession_id, user_id)
-    );
-    CREATE TABLE IF NOT EXISTS poll_options (
-      confession_id INTEGER NOT NULL,
-      idx           INTEGER NOT NULL,
-      label         TEXT NOT NULL,
-      PRIMARY KEY (confession_id, idx)
-    );
-    -- one vote per person per poll
-    CREATE TABLE IF NOT EXISTS poll_votes (
-      confession_id INTEGER NOT NULL,
-      user_id       TEXT NOT NULL,
-      idx           INTEGER NOT NULL,
-      PRIMARY KEY (confession_id, user_id)
-    );
-    PRAGMA user_version = 7;
-  `);
-  schemaVersion = 7;
-}
-// v8: the admin-facing Submission ID counts per server (1, 2, 3...) instead of across every server the bot is in.
-// `id` stays the internal key; `sub_id` is what moderators see and type. Existing posts are numbered in posting order.
-if (schemaVersion < 8) {
-  db.exec(`
-    ALTER TABLE confessions ADD COLUMN sub_id INTEGER;
-    UPDATE confessions SET sub_id = (SELECT COUNT(*) FROM confessions c2 WHERE c2.guild_id = confessions.guild_id AND c2.id <= confessions.id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_conf_subid ON confessions (guild_id, sub_id);
-    PRAGMA user_version = 8;
-  `);
-}
-// v9: appeals against warnings (one per warning; the warning id is shown to the user as W-0042).
-if (schemaVersion < 9) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS appeals (
-      warning_id  INTEGER PRIMARY KEY,
-      guild_id    TEXT NOT NULL,
-      user_id     TEXT NOT NULL,
-      message     TEXT,
-      status      TEXT NOT NULL DEFAULT 'open',
-      resolved_by TEXT,
-      created_at  INTEGER NOT NULL
-    );
-    PRAGMA user_version = 9;
-  `);
-  schemaVersion = 9;
-}
-// v10: privacy. Moderation records move from raw Discord IDs to keyed hashes (author_key, see lib/identity.js);
-// the raw sender ID stays on a confession only until the server's retention period ends. Also: self-delete window,
-// retention setting, and ban appeals (DM `fw appeal <text>`).
-if (schemaVersion < 10) {
-  db.exec('BEGIN');
-  try {
-    db.exec(`
-      ALTER TABLE confessions ADD COLUMN author_key TEXT;
-      ALTER TABLE confessions ADD COLUMN purged_at INTEGER;
-      ALTER TABLE bans ADD COLUMN dm_id TEXT;
-      ALTER TABLE guilds ADD COLUMN self_delete_minutes INTEGER NOT NULL DEFAULT 10;
-      ALTER TABLE guilds ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 0;
-      CREATE TABLE IF NOT EXISTS ban_appeals (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id    TEXT NOT NULL,
-        user_key    TEXT NOT NULL,
-        dm_id       TEXT,
-        message     TEXT,
-        status      TEXT NOT NULL DEFAULT 'open',
-        resolved_by TEXT,
-        created_at  INTEGER NOT NULL,
-        resolved_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_banappeal_user ON ban_appeals (guild_id, user_key);
-    `);
-    const each = (sql, fn) => db.prepare(sql).all().forEach(fn);
-    each('SELECT id, guild_id, author_id FROM confessions', (r) =>
-      db.prepare('UPDATE confessions SET author_key = ? WHERE id = ?').run(userKey(r.guild_id, r.author_id), r.id),
-    );
-    for (const table of ['warnings', 'mod_notes']) {
-      each(`SELECT id, guild_id, user_id FROM ${table}`, (r) => {
-        if (!isKey(r.user_id)) db.prepare(`UPDATE ${table} SET user_id = ? WHERE id = ?`).run(userKey(r.guild_id, r.user_id), r.id);
-      });
-    }
-    each('SELECT guild_id, user_id, expires_at FROM bans', (r) => {
-      if (isKey(r.user_id)) return;
-      // Timed bans keep the raw ID (until the retention purge) so the bot can DM when the ban ends.
-      db.prepare('UPDATE bans SET user_id = ?, dm_id = ? WHERE guild_id = ? AND user_id = ?').run(
-        userKey(r.guild_id, r.user_id), r.expires_at ? r.user_id : null, r.guild_id, r.user_id,
-      );
-    });
-    for (const [table, col] of [['reactions', 'user_id'], ['poll_votes', 'user_id'], ['reports', 'reporter_id']]) {
-      each(`SELECT t.confession_id AS cid, t.${col} AS uid, c.guild_id AS gid FROM ${table} t JOIN confessions c ON c.id = t.confession_id`, (r) => {
-        if (!isKey(r.uid)) db.prepare(`UPDATE ${table} SET ${col} = ? WHERE confession_id = ? AND ${col} = ?`).run(userKey(r.gid, r.uid), r.cid, r.uid);
-      });
-    }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-  db.exec('PRAGMA user_version = 10');
-  schemaVersion = 10;
-}
-
-// v11: auto-filter, optional approval queue, poll end/close, featured channel, content warnings, user preferences.
-if (schemaVersion < 11) {
-  db.exec(`
-    ALTER TABLE confessions ADD COLUMN reply_to TEXT;
-    ALTER TABLE confessions ADD COLUMN cw TEXT;
-    ALTER TABLE confessions ADD COLUMN poll_hours INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE confessions ADD COLUMN poll_ends_at INTEGER;
-    ALTER TABLE confessions ADD COLUMN poll_closed_at INTEGER;
-    ALTER TABLE confessions ADD COLUMN hold_reason TEXT;
-    ALTER TABLE confessions ADD COLUMN featured_channel_id TEXT;
-    ALTER TABLE confessions ADD COLUMN featured_message_id TEXT;
-    ALTER TABLE guilds ADD COLUMN approval_mode INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN filter_action TEXT NOT NULL DEFAULT 'reject';
-    ALTER TABLE guilds ADD COLUMN block_invites INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN block_links INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN poll_hours INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN featured_channel_id TEXT;
-    ALTER TABLE guilds ADD COLUMN featured_threshold INTEGER NOT NULL DEFAULT 5;
-    CREATE TABLE IF NOT EXISTS filter_rules (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id   TEXT NOT NULL,
-      kind       TEXT NOT NULL,
-      pattern    TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_filter_guild ON filter_rules (guild_id);
-    CREATE TABLE IF NOT EXISTS user_prefs (
-      user_id    TEXT PRIMARY KEY,
-      notify_off INTEGER NOT NULL DEFAULT 0,
-      preview    INTEGER NOT NULL DEFAULT 0
-    );
-    PRAGMA user_version = 11;
-  `);
-  schemaVersion = 11;
-}
-
-// v12: the heart reaction is gone; drop the old ones so they stop counting anywhere.
-if (schemaVersion < 12) {
-  db.exec("DELETE FROM reactions WHERE kind = 'heart'; PRAGMA user_version = 12;");
-  schemaVersion = 12;
-}
-
-// v13: anti-abuse gates. 0 = off, except dup_hours which starts at 24 (identical reposts within a day are blocked).
-if (schemaVersion < 13) {
-  db.exec(`
-    ALTER TABLE guilds ADD COLUMN min_join_days    INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN min_account_days INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN daily_cap        INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE guilds ADD COLUMN dup_hours        INTEGER NOT NULL DEFAULT 24;
-    CREATE INDEX IF NOT EXISTS idx_confessions_guild_created ON confessions (guild_id, created_at);
-    PRAGMA user_version = 13;
-  `);
-  schemaVersion = 13;
-}
-
-// v14: the server owner's 6-digit PIN (scrypt hash, "salt:hash"). Needed to look up a sender ID.
-if (schemaVersion < 14) {
-  db.exec('ALTER TABLE guilds ADD COLUMN owner_pin TEXT; PRAGMA user_version = 14;');
-  schemaVersion = 14;
-}
-
-// v15: reply threads with per-thread aliases and the optional OP tag, plus pausing and quiet hours.
-if (schemaVersion < 15) {
-  db.exec('BEGIN');
-  try {
-    db.exec(`
-      ALTER TABLE guilds ADD COLUMN auto_thread  INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE guilds ADD COLUMN paused_until INTEGER;
-      ALTER TABLE guilds ADD COLUMN pause_reason TEXT;
-      ALTER TABLE guilds ADD COLUMN quiet_start  INTEGER;
-      ALTER TABLE guilds ADD COLUMN quiet_end    INTEGER;
-      ALTER TABLE confessions ADD COLUMN thread_id   TEXT;
-      ALTER TABLE confessions ADD COLUMN thread_root INTEGER;
-      ALTER TABLE confessions ADD COLUMN op_tag      INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE confessions ADD COLUMN alias       TEXT;
-      CREATE TABLE IF NOT EXISTS thread_aliases (
-        root_id  INTEGER NOT NULL,
-        user_key TEXT NOT NULL,
-        alias    INTEGER NOT NULL,
-        PRIMARY KEY (root_id, user_key)
-      );
-      PRAGMA user_version = 15;
-    `);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-  schemaVersion = 15;
-}
-
-// v16: posting can be put on hold: submissions are saved ('scheduled') and posted when it resumes.
-if (schemaVersion < 16) {
-  db.exec('BEGIN');
-  try {
-    db.exec(`
-      ALTER TABLE guilds ADD COLUMN pause_hold INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE guilds ADD COLUMN quiet_hold INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE confessions ADD COLUMN posted_at INTEGER;
-      ALTER TABLE confessions ADD COLUMN release_tries INTEGER NOT NULL DEFAULT 0;
-      PRAGMA user_version = 16;
-    `);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-  schemaVersion = 16;
+// Refuse to start on a database that is missing a migration, instead of failing later in the middle of a command.
+{
+  const expected = readdirSync(new URL('../supabase/migrations/', import.meta.url)).filter((f) => f.endsWith('.sql'));
+  const table = await get("SELECT to_regclass('public.schema_migrations') AS t");
+  const applied = new Set(table.t ? (await all('SELECT name FROM schema_migrations')).map((r) => r.name) : []);
+  const missing = expected.filter((f) => !applied.has(f));
+  if (missing.length) throw new Error(`The database is not up to date. Run: npm run db:migrate (missing ${missing.join(', ')})`);
 }
 
 // Remember which secret made the stored keys. If it changes, every ban and warning silently stops matching: say so.
-db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 {
   const fp = secretFingerprint();
-  const stored = db.prepare("SELECT value FROM meta WHERE key = 'idkey_fp'").get()?.value;
-  if (!stored) db.prepare("INSERT INTO meta (key, value) VALUES ('idkey_fp', ?)").run(fp);
-  else if (stored !== fp) {
+  await run("INSERT INTO meta (key, value) VALUES ('idkey_fp', ?) ON CONFLICT (key) DO NOTHING", fp);
+  const { value } = await get("SELECT value FROM meta WHERE key = 'idkey_fp'");
+  if (value !== fp) {
     console.error(
       'WARNING: the ID hash secret is different from the one this database was written with (ID_HASH_SECRET or DISCORD_TOKEN changed).\n' +
         'Existing bans, warnings and notes will NOT match their users any more. Restore the old secret.',
@@ -379,28 +30,18 @@ db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT N
   }
 }
 
-// Last DM message id seen per user, so messages sent while the bot was offline can be found on startup.
-db.exec('CREATE TABLE IF NOT EXISTS dm_cursor (user_id TEXT PRIMARY KEY, last_id TEXT NOT NULL)');
-
-/** Write a consistent copy of the whole database to `path` (must not exist yet). Used by the backup job. */
-export function snapshotTo(path) {
-  db.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
+export async function getDmCursor(userId) {
+  return (await get('SELECT last_id FROM dm_cursor WHERE user_id = ?', userId))?.last_id ?? null;
 }
 
-export function getDmCursor(userId) {
-  return db.prepare('SELECT last_id FROM dm_cursor WHERE user_id = ?').get(userId)?.last_id ?? null;
-}
-
-export function setDmCursor(userId, lastId) {
-  db.prepare('INSERT INTO dm_cursor (user_id, last_id) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_id = excluded.last_id').run(userId, lastId);
+export async function setDmCursor(userId, lastId) {
+  await run('INSERT INTO dm_cursor (user_id, last_id) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_id = excluded.last_id', userId, lastId);
 }
 
 /** Everyone the bot has talked to: past authors plus anyone with a cursor. */
-export function knownDmUsers() {
-  return db
-    .prepare("SELECT author_id AS id FROM confessions WHERE author_id != '' UNION SELECT user_id AS id FROM dm_cursor")
-    .all()
-    .map((r) => r.id);
+export async function knownDmUsers() {
+  const rows = await all("SELECT author_id AS id FROM confessions WHERE author_id != '' UNION SELECT user_id AS id FROM dm_cursor");
+  return rows.map((r) => r.id);
 }
 
 /* ---------- guild config ---------- */
@@ -411,24 +52,27 @@ const GUILD_FIELDS = new Set([
   'highlight_daily_at', 'highlight_weekly_at', 'self_delete_minutes', 'retention_days', 'approval_mode', 'filter_action',
   'block_invites', 'block_links', 'poll_hours', 'featured_channel_id', 'featured_threshold', 'min_join_days',
   'min_account_days', 'daily_cap', 'dup_hours', 'owner_pin', 'auto_thread', 'paused_until', 'pause_reason',
-  'quiet_start', 'quiet_end', 'pause_hold', 'quiet_hold',
+  'quiet_start', 'quiet_end', 'pause_hold', 'quiet_hold', 'image_days',
 ]);
 
-export function getGuild(guildId) {
-  return db.prepare('SELECT * FROM guilds WHERE guild_id = ?').get(guildId);
+export async function getGuild(guildId) {
+  return await get('SELECT * FROM guilds WHERE guild_id = ?', guildId);
 }
 
-export function updateGuild(guildId, fields) {
-  db.prepare('INSERT OR IGNORE INTO guilds (guild_id) VALUES (?)').run(guildId);
-  for (const [key, value] of Object.entries(fields)) {
-    if (!GUILD_FIELDS.has(key)) throw new Error(`Bad guild field: ${key}`);
-    db.prepare(`UPDATE guilds SET ${key} = ? WHERE guild_id = ?`).run(value ?? null, guildId);
+export async function updateGuild(guildId, fields) {
+  const entries = Object.entries(fields);
+  for (const [key] of entries) if (!GUILD_FIELDS.has(key)) throw new Error(`Bad guild field: ${key}`);
+  await run('INSERT INTO guilds (guild_id) VALUES (?) ON CONFLICT (guild_id) DO NOTHING', guildId);
+  if (entries.length) {
+    // One statement, so the settings change together.
+    const sets = entries.map(([key]) => `${key} = ?`).join(', ');
+    await run(`UPDATE guilds SET ${sets} WHERE guild_id = ?`, ...entries.map(([, value]) => value ?? null), guildId);
   }
-  return getGuild(guildId);
+  return await getGuild(guildId);
 }
 
-export function configuredGuilds() {
-  return db.prepare('SELECT * FROM guilds WHERE channel_id IS NOT NULL').all();
+export async function configuredGuilds() {
+  return await all('SELECT * FROM guilds WHERE channel_id IS NOT NULL');
 }
 
 /* ---------- confessions ---------- */
@@ -439,362 +83,347 @@ export function configuredGuilds() {
  * assignNumber) or a poll end time yet.
  * Poll options are stored together with the confession.
  */
-export function createConfession(guildId, authorId, content, hasImage = false, extras = {}) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
+export async function createConfession(guildId, authorId, content, hasImage = false, extras = {}) {
+  return await transaction(async () => {
     const waiting = extras.pending ? 'pending' : extras.scheduled ? 'scheduled' : null;
+    // Locks the server's row until commit, so two posts cannot take the same number or Submission ID.
+    const guild = await get('SELECT counter FROM guilds WHERE guild_id = ? FOR UPDATE', guildId);
     let counter = 0;
     if (!waiting) {
-      db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
-      counter = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId).counter;
+      if (!guild) throw new Error(`Server ${guildId} is not set up.`);
+      ({ counter } = await get('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ? RETURNING counter', guildId));
     }
-    const { next: subId } = db.prepare('SELECT COALESCE(MAX(sub_id), 0) + 1 AS next FROM confessions WHERE guild_id = ?').get(guildId);
+    const { next: subId } = await get('SELECT COALESCE(MAX(sub_id), 0) + 1 AS next FROM confessions WHERE guild_id = ?', guildId);
     const isPoll = extras.pollOptions?.length ? 1 : 0;
     const pollHours = isPoll ? (extras.pollHours ?? 0) : 0;
     const now = Date.now();
-    const { lastInsertRowid } = db
-      .prepare(
-        `INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id,
-                                  status, reply_to, cw, poll_hours, poll_ends_at, hold_reason, thread_root, op_tag)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, now, extras.tag ?? null, isPoll, subId,
-        waiting ?? 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
-        !waiting && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
-        extras.threadRoot ?? null, extras.opTag ? 1 : 0,
-      );
-    extras.pollOptions?.forEach((label, idx) =>
-      db.prepare('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)').run(lastInsertRowid, idx, label),
+    const { id } = await get(
+      `INSERT INTO confessions (guild_id, number, author_id, author_key, content, has_image, created_at, tag, is_poll, sub_id,
+                                status, reply_to, cw, poll_hours, poll_ends_at, hold_reason, thread_root, op_tag)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      guildId, counter, authorId, keyOf(guildId, authorId), content, hasImage ? 1 : 0, now, extras.tag ?? null, isPoll, subId,
+      waiting ?? 'posted', extras.replyTo ?? null, extras.cw ?? null, pollHours,
+      !waiting && pollHours > 0 ? now + pollHours * 3_600_000 : null, extras.holdReason ?? null,
+      extras.threadRoot ?? null, extras.opTag ? 1 : 0,
     );
-    db.exec('COMMIT');
-    return { id: Number(lastInsertRowid), number: counter, subId };
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+    for (const [idx, label] of (extras.pollOptions ?? []).entries()) {
+      await run('INSERT INTO poll_options (confession_id, idx, label) VALUES (?, ?, ?)', id, idx, label);
+    }
+    return { id, number: counter, subId };
+  });
 }
 
 /** A waiting post goes live: give it the next public number and start its poll clock. Returns the number. */
-export function assignNumber(guildId, id) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ?').run(guildId);
-    const { counter } = db.prepare('SELECT counter FROM guilds WHERE guild_id = ?').get(guildId);
+export async function assignNumber(guildId, id) {
+  return await transaction(async () => {
+    const { counter } = await get('UPDATE guilds SET counter = counter + 1 WHERE guild_id = ? RETURNING counter', guildId);
     const now = Date.now();
-    db.prepare(
-      "UPDATE confessions SET number = ?, status = 'posted', posted_at = ?, poll_ends_at = CASE WHEN poll_hours > 0 THEN ? + poll_hours * 3600000 ELSE NULL END WHERE guild_id = ? AND id = ?",
-    ).run(counter, now, now, guildId, id);
-    db.exec('COMMIT');
+    await run(
+      "UPDATE confessions SET number = ?, status = 'posted', posted_at = ?, poll_ends_at = CASE WHEN poll_hours > 0 THEN ?::bigint + poll_hours::bigint * 3600000 ELSE NULL END WHERE guild_id = ? AND id = ?",
+      counter, now, now, guildId, id,
+    );
     return counter;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  });
 }
 
 /** Posting a waiting submission failed: put it back (`status`) and give the number back. */
-export function revertAssign(guildId, id, number, status = 'pending') {
-  db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
-  db.prepare('UPDATE confessions SET number = 0, status = ?, posted_at = NULL, poll_ends_at = NULL WHERE guild_id = ? AND id = ?').run(status, guildId, id);
+export async function revertAssign(guildId, id, number, status = 'pending') {
+  return await transaction(async () => {
+    await run('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?', guildId, number);
+    await run('UPDATE confessions SET number = 0, status = ?, posted_at = NULL, poll_ends_at = NULL WHERE guild_id = ? AND id = ?', status, guildId, id);
+  });
 }
 
 /** Undo a createConfession whose Discord post failed. Call only while holding the guild lock. */
-export function discardConfession(guildId, id, number) {
-  db.prepare('DELETE FROM confession_images WHERE confession_id = ?').run(id);
-  db.prepare('DELETE FROM poll_options WHERE confession_id = ?').run(id);
-  db.prepare('DELETE FROM confessions WHERE guild_id = ? AND id = ?').run(guildId, id);
-  db.prepare('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?').run(guildId, number);
+export async function discardConfession(guildId, id, number) {
+  return await transaction(async () => {
+    await run('DELETE FROM confession_images WHERE confession_id = ?', id);
+    await run('DELETE FROM poll_options WHERE confession_id = ?', id);
+    await run('DELETE FROM confessions WHERE guild_id = ? AND id = ?', guildId, id);
+    await run('UPDATE guilds SET counter = counter - 1 WHERE guild_id = ? AND counter = ?', guildId, number);
+  });
 }
 
-export function setConfessionImage(id, name, buffer) {
-  db.prepare('INSERT OR REPLACE INTO confession_images (confession_id, name, data) VALUES (?, ?, ?)').run(id, name, buffer);
+export async function setConfessionImage(id, name, buffer) {
+  await run(
+    'INSERT INTO confession_images (confession_id, name, data) VALUES (?, ?, ?) ON CONFLICT (confession_id) DO UPDATE SET name = excluded.name, data = excluded.data',
+    id, name, buffer,
+  );
 }
 
 /** { name, buffer } or null. */
-export function getConfessionImage(id) {
-  const r = db.prepare('SELECT name, data FROM confession_images WHERE confession_id = ?').get(id);
+export async function getConfessionImage(id) {
+  const r = await get('SELECT name, data FROM confession_images WHERE confession_id = ?', id);
   return r ? { name: r.name, buffer: Buffer.from(r.data) } : null;
 }
 
 /** What the public post looked like (text with links, color), so an auto-hidden post can be put back. */
-export function setConfessionRendered(id, rendered, color) {
-  db.prepare('UPDATE confessions SET rendered = ?, color = ? WHERE id = ?').run(rendered, color, id);
+export async function setConfessionRendered(id, rendered, color) {
+  await run('UPDATE confessions SET rendered = ?, color = ? WHERE id = ?', rendered, color, id);
 }
 
-export function setConfessionMessage(guildId, id, channelId, messageId) {
-  db.prepare('UPDATE confessions SET channel_id = ?, message_id = ? WHERE guild_id = ? AND id = ?')
-    .run(channelId, messageId, guildId, id);
+export async function setConfessionMessage(guildId, id, channelId, messageId) {
+  await run('UPDATE confessions SET channel_id = ?, message_id = ? WHERE guild_id = ? AND id = ?', channelId, messageId, guildId, id);
 }
 
 /** Look up by the internal key (used inside button ids). Scoped to the server. */
-export function getConfession(guildId, id) {
-  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND id = ?').get(guildId, id);
+export async function getConfession(guildId, id) {
+  return await get('SELECT * FROM confessions WHERE guild_id = ? AND id = ?', guildId, id);
 }
 
 /** Look up by the Submission ID moderators see and type (counts per server). */
-export function getConfessionBySubId(guildId, subId) {
-  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND sub_id = ?').get(guildId, subId);
+export async function getConfessionBySubId(guildId, subId) {
+  return await get('SELECT * FROM confessions WHERE guild_id = ? AND sub_id = ?', guildId, subId);
 }
 
 /** Newest still-posted confession with this public number (numbers repeat after a reset). */
-export function getLatestPostedByNumber(guildId, number) {
-  return db
-    .prepare(
-      `SELECT * FROM confessions
+export async function getLatestPostedByNumber(guildId, number) {
+  return await get(`SELECT * FROM confessions
        WHERE guild_id = ? AND number = ? AND status = 'posted' AND message_id IS NOT NULL AND channel_id IS NOT NULL
-       ORDER BY id DESC LIMIT 1`,
-    )
-    .get(guildId, number);
+       ORDER BY id DESC LIMIT 1`, guildId, number);
 }
 
-export function getConfessionByMessage(guildId, messageId) {
-  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND message_id = ?').get(guildId, messageId);
+export async function getConfessionByMessage(guildId, messageId) {
+  return await get('SELECT * FROM confessions WHERE guild_id = ? AND message_id = ?', guildId, messageId);
 }
 
-export function markConfession(guildId, id, status) {
-  db.prepare('UPDATE confessions SET status = ? WHERE guild_id = ? AND id = ?').run(status, guildId, id);
+export async function markConfession(guildId, id, status) {
+  await run('UPDATE confessions SET status = ? WHERE guild_id = ? AND id = ?', status, guildId, id);
 }
 
 /** Restart the public numbering. The next confession gets `startAt` (default 1). IDs are untouched. */
-export function resetCounter(guildId, startAt = 1) {
-  db.prepare('INSERT OR IGNORE INTO guilds (guild_id) VALUES (?)').run(guildId);
-  db.prepare('UPDATE guilds SET counter = ? WHERE guild_id = ?').run(startAt - 1, guildId);
+export async function resetCounter(guildId, startAt = 1) {
+  await run(
+    'INSERT INTO guilds (guild_id, counter) VALUES (?, ?) ON CONFLICT (guild_id) DO UPDATE SET counter = excluded.counter',
+    guildId, startAt - 1,
+  );
 }
 
-export function lastConfessionAt(guildId, userId) {
-  const row = db
-    .prepare('SELECT MAX(created_at) AS t FROM confessions WHERE guild_id = ? AND author_key = ?')
-    .get(guildId, keyOf(guildId, userId));
+export async function lastConfessionAt(guildId, userId) {
+  const row = await get('SELECT MAX(created_at) AS t FROM confessions WHERE guild_id = ? AND author_key = ?', guildId, keyOf(guildId, userId));
   return row?.t ?? 0;
 }
 
 /** Creation times (oldest first) of this person's posts since `since`; rejected posts do not count. For the daily cap. */
-export function postTimesSince(guildId, userId, since) {
-  return db
-    .prepare("SELECT created_at FROM confessions WHERE guild_id = ? AND author_key = ? AND created_at >= ? AND status != 'rejected' ORDER BY created_at ASC")
-    .all(guildId, keyOf(guildId, userId), since)
+export async function postTimesSince(guildId, userId, since) {
+  return (await all("SELECT created_at FROM confessions WHERE guild_id = ? AND author_key = ? AND created_at >= ? AND status != 'rejected' ORDER BY created_at ASC", guildId, keyOf(guildId, userId), since))
     .map((r) => r.created_at);
 }
 
 /** Text of the newest posts since `since` (any author, any status), for the repost blocker. Erased texts are skipped. */
-export function recentContents(guildId, since, limit = 300) {
-  return db
-    .prepare("SELECT content FROM confessions WHERE guild_id = ? AND created_at >= ? AND content != '' ORDER BY id DESC LIMIT ?")
-    .all(guildId, since, limit);
+export async function recentContents(guildId, since, limit = 300) {
+  return await all("SELECT content FROM confessions WHERE guild_id = ? AND created_at >= ? AND content != '' ORDER BY id DESC LIMIT ?", guildId, since, limit);
 }
 
-export function countPending(guildId) {
-  return db.prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'pending'").get(guildId).n;
+export async function countPending(guildId) {
+  return (await get("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'pending'", guildId)).n;
 }
 
 /** False when the ID hash secret differs from the one the stored keys were made with. */
-export function secretMatches() {
-  const stored = db.prepare("SELECT value FROM meta WHERE key = 'idkey_fp'").get()?.value;
+export async function secretMatches() {
+  const stored = (await get("SELECT value FROM meta WHERE key = 'idkey_fp'"))?.value;
   return !stored || stored === secretFingerprint();
 }
 
 /* ---------- warnings & bans ---------- */
 
 /** Returns the new warning's id (shown to the user as W-0042). */
-export function addWarning(guildId, userId, confessionId, reason) {
-  const result = db
-    .prepare('INSERT INTO warnings (guild_id, user_id, confession_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(guildId, keyOf(guildId, userId), confessionId, reason ?? null, Date.now());
-  return Number(result.lastInsertRowid);
+export async function addWarning(guildId, userId, confessionId, reason) {
+  const { id } = await get(
+    'INSERT INTO warnings (guild_id, user_id, confession_id, reason, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    guildId, keyOf(guildId, userId), confessionId, reason ?? null, Date.now(),
+  );
+  return id;
 }
 
-export function getWarning(id) {
-  return db.prepare('SELECT * FROM warnings WHERE id = ?').get(id);
+export async function getWarning(id) {
+  return await get('SELECT * FROM warnings WHERE id = ?', id);
 }
 
-export function deleteWarning(id) {
-  return db.prepare('DELETE FROM warnings WHERE id = ?').run(id).changes > 0;
+export async function deleteWarning(id) {
+  return await run('DELETE FROM warnings WHERE id = ?', id) > 0;
 }
 
 /* ---------- appeals ---------- */
 
-export function addAppeal(warningId, guildId, userId, message) {
-  db.prepare('INSERT INTO appeals (warning_id, guild_id, user_id, message, created_at) VALUES (?, ?, ?, ?, ?)').run(
-    warningId, guildId, userId, message ?? null, Date.now(),
-  );
+export async function addAppeal(warningId, guildId, userId, message) {
+  await run('INSERT INTO appeals (warning_id, guild_id, user_id, message, created_at) VALUES (?, ?, ?, ?, ?)', warningId, guildId, userId, message ?? null, Date.now());
 }
 
-export function getAppeal(warningId) {
-  return db.prepare('SELECT * FROM appeals WHERE warning_id = ?').get(warningId);
+export async function getAppeal(warningId) {
+  return await get('SELECT * FROM appeals WHERE warning_id = ?', warningId);
 }
 
-export function resolveAppeal(warningId, status, resolvedBy) {
-  db.prepare('UPDATE appeals SET status = ?, resolved_by = ? WHERE warning_id = ?').run(status, resolvedBy, warningId);
+export async function resolveAppeal(warningId, status, resolvedBy) {
+  await run('UPDATE appeals SET status = ?, resolved_by = ? WHERE warning_id = ?', status, resolvedBy, warningId);
 }
 
 const DAY_MS = 86_400_000;
 
 /** Warnings older than the server's warn_expiry_days (0 = never) no longer count towards the limit. */
-function warningCutoff(guildId) {
-  const days = getGuild(guildId)?.warn_expiry_days ?? 0;
+async function warningCutoff(guildId) {
+  const days = (await getGuild(guildId))?.warn_expiry_days ?? 0;
   return days > 0 ? Date.now() - days * DAY_MS : 0;
 }
 
 /** Warnings that still count (not expired). */
-export function countWarnings(guildId, userId) {
-  return db
-    .prepare('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND user_id = ? AND created_at > ?')
-    .get(guildId, keyOf(guildId, userId), warningCutoff(guildId)).n;
+export async function countWarnings(guildId, userId) {
+  return (await get('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND user_id = ? AND created_at > ?', guildId, keyOf(guildId, userId), await warningCutoff(guildId))).n;
 }
 
 /** Every warning ever given, newest first, with whether it has expired. */
-export function listWarnings(guildId, userId) {
-  const cutoff = warningCutoff(guildId);
-  return db
-    .prepare('SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC')
-    .all(guildId, keyOf(guildId, userId))
+export async function listWarnings(guildId, userId) {
+  const cutoff = await warningCutoff(guildId);
+  return (await all('SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC', guildId, keyOf(guildId, userId)))
     .map((w) => ({ ...w, expired: w.created_at <= cutoff }));
 }
 
-export function clearWarnings(guildId, userId) {
-  db.prepare('DELETE FROM warnings WHERE guild_id = ? AND user_id = ?').run(guildId, keyOf(guildId, userId));
+export async function clearWarnings(guildId, userId) {
+  await run('DELETE FROM warnings WHERE guild_id = ? AND user_id = ?', guildId, keyOf(guildId, userId));
 }
 
 /** `expiresAt` = epoch ms when the ban lifts itself, or null for a permanent ban. */
-export function banUser(guildId, userId, reason, bannedBy, expiresAt = null, dmId = null) {
+export async function banUser(guildId, userId, reason, bannedBy, expiresAt = null, dmId = null) {
   // dm_id (raw ID) is kept only for timed bans, so the bot can DM when one ends. The retention purge clears it.
   const raw = expiresAt ? (dmId || (isKey(userId) ? null : userId)) : null;
-  db.prepare(
-    'INSERT OR REPLACE INTO bans (guild_id, user_id, reason, banned_by, created_at, expires_at, dm_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(guildId, keyOf(guildId, userId), reason ?? null, bannedBy ?? null, Date.now(), expiresAt, raw);
+  await run(
+    `INSERT INTO bans (guild_id, user_id, reason, banned_by, created_at, expires_at, dm_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET reason = excluded.reason, banned_by = excluded.banned_by,
+       created_at = excluded.created_at, expires_at = excluded.expires_at, dm_id = excluded.dm_id`,
+    guildId, keyOf(guildId, userId), reason ?? null, bannedBy ?? null, Date.now(), expiresAt, raw,
+  );
 }
 
 /** Remove and return every ban whose time is up (the scheduler tells the user and the mods). */
-export function takeExpiredBans() {
-  const now = Date.now();
-  const rows = db.prepare('SELECT * FROM bans WHERE expires_at IS NOT NULL AND expires_at <= ?').all(now);
-  if (rows.length) db.prepare('DELETE FROM bans WHERE expires_at IS NOT NULL AND expires_at <= ?').run(now);
-  return rows;
+export async function takeExpiredBans() {
+  return await all('DELETE FROM bans WHERE expires_at IS NOT NULL AND expires_at <= ? RETURNING *', Date.now());
 }
 
-export function unbanUser(guildId, userId) {
-  return db.prepare('DELETE FROM bans WHERE guild_id = ? AND user_id = ?').run(guildId, keyOf(guildId, userId)).changes > 0;
+export async function unbanUser(guildId, userId) {
+  return await run('DELETE FROM bans WHERE guild_id = ? AND user_id = ?', guildId, keyOf(guildId, userId)) > 0;
 }
 
 /** The active ban, or undefined. A timed ban whose time has passed counts as lifted even before the scheduler runs. */
-export function getBan(guildId, userId) {
-  return db
-    .prepare('SELECT * FROM bans WHERE guild_id = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)')
-    .get(guildId, keyOf(guildId, userId), Date.now());
+export async function getBan(guildId, userId) {
+  return await get('SELECT * FROM bans WHERE guild_id = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)', guildId, keyOf(guildId, userId), Date.now());
 }
 
 /* ---------- reports ---------- */
 
 /** Reactions, votes and reports are stored under the person's key for that server, never the raw ID. */
-function voterKey(confessionId, userId) {
-  const guildId = db.prepare('SELECT guild_id FROM confessions WHERE id = ?').get(confessionId)?.guild_id ?? '';
+async function voterKey(confessionId, userId) {
+  const guildId = (await get('SELECT guild_id FROM confessions WHERE id = ?', confessionId))?.guild_id ?? '';
   return keyOf(guildId, userId);
 }
 
 /** True when this is a new report (each person can report a post once). */
-export function addReport(confessionId, reporterId, reason) {
+export async function addReport(confessionId, reporterId, reason) {
   return (
-    db
-      .prepare('INSERT OR IGNORE INTO reports (confession_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)')
-      .run(confessionId, voterKey(confessionId, reporterId), reason ?? null, Date.now()).changes > 0
+    await run('INSERT INTO reports (confession_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (confession_id, reporter_id) DO NOTHING', confessionId, await voterKey(confessionId, reporterId), reason ?? null, Date.now()) > 0
   );
 }
 
-export function hasReported(confessionId, reporterId) {
+export async function hasReported(confessionId, reporterId) {
   return Boolean(
-    db.prepare('SELECT 1 FROM reports WHERE confession_id = ? AND reporter_id = ?').get(confessionId, voterKey(confessionId, reporterId)),
+    await get('SELECT 1 FROM reports WHERE confession_id = ? AND reporter_id = ?', confessionId, await voterKey(confessionId, reporterId)),
   );
 }
 
-export function countReports(confessionId) {
-  return db.prepare('SELECT COUNT(*) AS n FROM reports WHERE confession_id = ?').get(confessionId).n;
+export async function countReports(confessionId) {
+  return (await get('SELECT COUNT(*) AS n FROM reports WHERE confession_id = ?', confessionId)).n;
 }
 
-export function clearReports(confessionId) {
-  db.prepare('DELETE FROM reports WHERE confession_id = ?').run(confessionId);
+export async function clearReports(confessionId) {
+  await run('DELETE FROM reports WHERE confession_id = ?', confessionId);
 }
 
 /* ---------- mod notes & history ---------- */
 
-export function addNote(guildId, userId, confessionId, note, moderatorId) {
-  db.prepare(
-    'INSERT INTO mod_notes (guild_id, user_id, confession_id, note, moderator_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(guildId, keyOf(guildId, userId), confessionId, note, moderatorId, Date.now());
+export async function addNote(guildId, userId, confessionId, note, moderatorId) {
+  await run('INSERT INTO mod_notes (guild_id, user_id, confession_id, note, moderator_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', guildId, keyOf(guildId, userId), confessionId, note, moderatorId, Date.now());
 }
 
-export function listNotes(guildId, userId) {
-  return db.prepare('SELECT * FROM mod_notes WHERE guild_id = ? AND user_id = ? ORDER BY id DESC').all(guildId, keyOf(guildId, userId));
+export async function listNotes(guildId, userId) {
+  return await all('SELECT * FROM mod_notes WHERE guild_id = ? AND user_id = ? ORDER BY id DESC', guildId, keyOf(guildId, userId));
 }
 
-export function listConfessionsByAuthor(guildId, userId) {
-  return db.prepare('SELECT * FROM confessions WHERE guild_id = ? AND author_key = ? ORDER BY id DESC').all(guildId, keyOf(guildId, userId));
+export async function listConfessionsByAuthor(guildId, userId) {
+  return await all('SELECT * FROM confessions WHERE guild_id = ? AND author_key = ? ORDER BY id DESC', guildId, keyOf(guildId, userId));
 }
 
 /* ---------- topic channels ---------- */
 
-export function getTagChannel(guildId, tag) {
-  return db.prepare('SELECT channel_id FROM tag_channels WHERE guild_id = ? AND tag = ?').get(guildId, tag)?.channel_id ?? null;
+export async function getTagChannel(guildId, tag) {
+  return (await get('SELECT channel_id FROM tag_channels WHERE guild_id = ? AND tag = ?', guildId, tag))?.channel_id ?? null;
 }
 
-export function setTagChannel(guildId, tag, channelId) {
-  if (!channelId) db.prepare('DELETE FROM tag_channels WHERE guild_id = ? AND tag = ?').run(guildId, tag);
+export async function setTagChannel(guildId, tag, channelId) {
+  if (!channelId) await run('DELETE FROM tag_channels WHERE guild_id = ? AND tag = ?', guildId, tag);
   else
-    db.prepare(
-      'INSERT INTO tag_channels (guild_id, tag, channel_id) VALUES (?, ?, ?) ON CONFLICT(guild_id, tag) DO UPDATE SET channel_id = excluded.channel_id',
-    ).run(guildId, tag, channelId);
+    await run('INSERT INTO tag_channels (guild_id, tag, channel_id) VALUES (?, ?, ?) ON CONFLICT(guild_id, tag) DO UPDATE SET channel_id = excluded.channel_id', guildId, tag, channelId);
 }
 
-export function listTagChannels(guildId) {
-  return db.prepare('SELECT tag, channel_id FROM tag_channels WHERE guild_id = ?').all(guildId);
+export async function listTagChannels(guildId) {
+  return await all('SELECT tag, channel_id FROM tag_channels WHERE guild_id = ?', guildId);
 }
 
 /* ---------- reactions & polls (votes are never shown with a name, the user id only enforces one vote each) ---------- */
 
 /** Click a reaction: same one again removes it, a different one switches. Returns the user's new reaction or null. */
-export function toggleReaction(confessionId, userId, kind) {
-  userId = voterKey(confessionId, userId);
-  const current = db.prepare('SELECT kind FROM reactions WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.kind;
-  if (current === kind) {
-    db.prepare('DELETE FROM reactions WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
-    return null;
-  }
-  db.prepare(
-    'INSERT INTO reactions (confession_id, user_id, kind) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET kind = excluded.kind',
-  ).run(confessionId, userId, kind);
-  return kind;
+export async function toggleReaction(confessionId, userId, kind) {
+  const voter = await voterKey(confessionId, userId);
+  return await transaction(async () => {
+    await lock(`reaction:${confessionId}:${voter}`); // two quick taps are handled one after the other
+    const current = (await get('SELECT kind FROM reactions WHERE confession_id = ? AND user_id = ?', confessionId, voter))?.kind;
+    if (current === kind) {
+      await run('DELETE FROM reactions WHERE confession_id = ? AND user_id = ?', confessionId, voter);
+      return null;
+    }
+    await run(
+      'INSERT INTO reactions (confession_id, user_id, kind) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET kind = excluded.kind',
+      confessionId, voter, kind,
+    );
+    return kind;
+  });
 }
 
-export function reactionCounts(confessionId) {
+export async function reactionCounts(confessionId) {
   const counts = { up: 0, down: 0 };
-  for (const r of db.prepare('SELECT kind, COUNT(*) AS n FROM reactions WHERE confession_id = ? GROUP BY kind').all(confessionId)) {
+  for (const r of await all('SELECT kind, COUNT(*) AS n FROM reactions WHERE confession_id = ? GROUP BY kind', confessionId)) {
     counts[r.kind] = r.n;
   }
   return counts;
 }
 
-export function getPollOptions(confessionId) {
-  return db.prepare('SELECT idx, label FROM poll_options WHERE confession_id = ? ORDER BY idx').all(confessionId);
+export async function getPollOptions(confessionId) {
+  return await all('SELECT idx, label FROM poll_options WHERE confession_id = ? ORDER BY idx', confessionId);
 }
 
 /** Vote for option `idx`; the same option again withdraws the vote. Returns the new choice or null. */
-export function togglePollVote(confessionId, userId, idx) {
-  userId = voterKey(confessionId, userId);
-  const current = db.prepare('SELECT idx FROM poll_votes WHERE confession_id = ? AND user_id = ?').get(confessionId, userId)?.idx;
-  if (current === idx) {
-    db.prepare('DELETE FROM poll_votes WHERE confession_id = ? AND user_id = ?').run(confessionId, userId);
-    return null;
-  }
-  db.prepare(
-    'INSERT INTO poll_votes (confession_id, user_id, idx) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET idx = excluded.idx',
-  ).run(confessionId, userId, idx);
-  return idx;
+export async function togglePollVote(confessionId, userId, idx) {
+  const voter = await voterKey(confessionId, userId);
+  return await transaction(async () => {
+    await lock(`vote:${confessionId}:${voter}`);
+    // Holds the post's row until commit: a poll cannot close between this check and the vote.
+    const post = await get('SELECT poll_closed_at FROM confessions WHERE id = ? FOR SHARE', confessionId);
+    if (post?.poll_closed_at) return undefined;
+    const current = (await get('SELECT idx FROM poll_votes WHERE confession_id = ? AND user_id = ?', confessionId, voter))?.idx;
+    if (current === idx) {
+      await run('DELETE FROM poll_votes WHERE confession_id = ? AND user_id = ?', confessionId, voter);
+      return null;
+    }
+    await run(
+      'INSERT INTO poll_votes (confession_id, user_id, idx) VALUES (?, ?, ?) ON CONFLICT(confession_id, user_id) DO UPDATE SET idx = excluded.idx',
+      confessionId, voter, idx,
+    );
+    return idx;
+  });
 }
 
 /** Map of option idx -> votes. */
-export function pollCounts(confessionId) {
+export async function pollCounts(confessionId) {
   const counts = new Map();
-  for (const r of db.prepare('SELECT idx, COUNT(*) AS n FROM poll_votes WHERE confession_id = ? GROUP BY idx').all(confessionId)) {
+  for (const r of await all('SELECT idx, COUNT(*) AS n FROM poll_votes WHERE confession_id = ? GROUP BY idx', confessionId)) {
     counts.set(r.idx, r.n);
   }
   return counts;
@@ -803,27 +432,26 @@ export function pollCounts(confessionId) {
 /* ---------- highlights ---------- */
 
 /** Most-liked post (👍, fewest 👎 breaks ties, then the older one) created at or after `since`. Null when nobody liked anything. */
-export function topLikedSince(guildId, since) {
+export async function topLikedSince(guildId, since) {
   return (
-    db
-      .prepare(
-        `SELECT c.*,
-                COALESCE(SUM(r.kind = 'up'), 0)   AS ups,
-                COALESCE(SUM(r.kind = 'down'), 0) AS downs
-           FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
-          WHERE c.guild_id = ? AND c.status = 'posted' AND COALESCE(c.posted_at, c.created_at) >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
-            AND c.thread_root IS NULL
-          GROUP BY c.id
-         HAVING ups > 0
-          ORDER BY ups DESC, downs ASC, c.id ASC
-          LIMIT 1`,
-      )
-      .get(guildId, since) ?? null
+    (await get(
+      `SELECT c.*,
+              COUNT(*) FILTER (WHERE r.kind = 'up')   AS ups,
+              COUNT(*) FILTER (WHERE r.kind = 'down') AS downs
+         FROM confessions c LEFT JOIN reactions r ON r.confession_id = c.id
+        WHERE c.guild_id = ? AND c.status = 'posted' AND COALESCE(c.posted_at, c.created_at) >= ? AND c.message_id IS NOT NULL AND c.purged_at IS NULL
+          AND c.thread_root IS NULL
+        GROUP BY c.id
+       HAVING COUNT(*) FILTER (WHERE r.kind = 'up') > 0
+        ORDER BY ups DESC, downs ASC, c.id ASC
+        LIMIT 1`,
+      guildId, since,
+    )) ?? null
   );
 }
 
-export function guildsWithHighlights() {
-  return db.prepare("SELECT * FROM guilds WHERE highlight_channel_id IS NOT NULL AND highlight_period != 'off'").all();
+export async function guildsWithHighlights() {
+  return await all("SELECT * FROM guilds WHERE highlight_channel_id IS NOT NULL AND highlight_period != 'off'");
 }
 
 /* ---------- retention ---------- */
@@ -833,146 +461,164 @@ export function guildsWithHighlights() {
  * ID kept for timed-ban DMs. The row stays (IDs, numbers, status, key) so history, bans and warnings keep working.
  * Returns how many posts were purged.
  */
-export function purgeExpired() {
+export async function purgeExpired() {
   const now = Date.now();
   let purged = 0;
-  for (const g of db.prepare('SELECT guild_id, retention_days FROM guilds WHERE retention_days > 0').all()) {
+  for (const g of await all('SELECT guild_id, retention_days FROM guilds WHERE retention_days > 0')) {
     const cutoff = now - g.retention_days * DAY_MS;
-    db.exec('BEGIN');
-    try {
-      db.prepare(
+    purged += await transaction(async () => {
+      await run(
         'DELETE FROM confession_images WHERE confession_id IN (SELECT id FROM confessions WHERE guild_id = ? AND created_at < ? AND purged_at IS NULL)',
-      ).run(g.guild_id, cutoff);
-      purged += db
-        .prepare("UPDATE confessions SET author_id = '', content = '', rendered = NULL, purged_at = ? WHERE guild_id = ? AND created_at < ? AND purged_at IS NULL")
-        .run(now, g.guild_id, cutoff).changes;
-      db.prepare('UPDATE bans SET dm_id = NULL WHERE guild_id = ? AND created_at < ? AND dm_id IS NOT NULL').run(g.guild_id, cutoff);
-      db.prepare("UPDATE ban_appeals SET dm_id = NULL, message = NULL WHERE guild_id = ? AND created_at < ? AND status != 'open'").run(g.guild_id, cutoff);
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
+        g.guild_id, cutoff,
+      );
+      const changed = await run(
+        "UPDATE confessions SET author_id = '', content = '', rendered = NULL, purged_at = ? WHERE guild_id = ? AND created_at < ? AND purged_at IS NULL",
+        now, g.guild_id, cutoff,
+      );
+      await run('UPDATE bans SET dm_id = NULL WHERE guild_id = ? AND created_at < ? AND dm_id IS NOT NULL', g.guild_id, cutoff);
+      await run("UPDATE ban_appeals SET dm_id = NULL, message = NULL WHERE guild_id = ? AND created_at < ? AND status != 'open'", g.guild_id, cutoff);
+      return changed;
+    });
   }
   return purged;
 }
 
-/* ---------- ban appeals (DM: fw appeal <text>) ---------- */
-
-export function addBanAppeal(guildId, userId, message) {
-  const r = db
-    .prepare('INSERT INTO ban_appeals (guild_id, user_key, dm_id, message, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(guildId, keyOf(guildId, userId), userId, message, Date.now());
-  return Number(r.lastInsertRowid);
+/**
+ * Space saver, separate from retention: for every server with an image period, delete stored images of finished posts
+ * older than that. Sender IDs, text and all other records stay. Posts still waiting (approval, saved, hidden) keep
+ * theirs, because the picture is needed to put them up. Returns how many images were deleted.
+ */
+export async function purgeOldImages() {
+  return await run(
+    `DELETE FROM confession_images i USING confessions c, guilds g
+      WHERE c.id = i.confession_id AND g.guild_id = c.guild_id AND g.image_days > 0
+        AND c.created_at < ?::bigint - g.image_days::bigint * ?::bigint
+        AND c.status IN ('posted', 'deleted', 'rejected')`,
+    Date.now(), DAY_MS,
+  );
 }
 
-export function getBanAppeal(id) {
-  return db.prepare('SELECT * FROM ban_appeals WHERE id = ?').get(id);
+/* ---------- ban appeals (DM: fw appeal <text>) ---------- */
+
+export async function addBanAppeal(guildId, userId, message) {
+  const { id } = await get(
+    'INSERT INTO ban_appeals (guild_id, user_key, dm_id, message, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id',
+    guildId, keyOf(guildId, userId), userId, message, Date.now(),
+  );
+  return id;
+}
+
+export async function getBanAppeal(id) {
+  return await get('SELECT * FROM ban_appeals WHERE id = ?', id);
 }
 
 /** The user's newest appeal in this server, or undefined. */
-export function latestBanAppeal(guildId, userId) {
-  return db.prepare('SELECT * FROM ban_appeals WHERE guild_id = ? AND user_key = ? ORDER BY id DESC LIMIT 1').get(guildId, keyOf(guildId, userId));
+export async function latestBanAppeal(guildId, userId) {
+  return await get('SELECT * FROM ban_appeals WHERE guild_id = ? AND user_key = ? ORDER BY id DESC LIMIT 1', guildId, keyOf(guildId, userId));
 }
 
-export function resolveBanAppeal(id, status, resolvedBy) {
-  db.prepare('UPDATE ban_appeals SET status = ?, resolved_by = ?, resolved_at = ?, dm_id = NULL WHERE id = ?').run(status, resolvedBy, Date.now(), id);
+export async function resolveBanAppeal(id, status, resolvedBy) {
+  await run('UPDATE ban_appeals SET status = ?, resolved_by = ?, resolved_at = ?, dm_id = NULL WHERE id = ?', status, resolvedBy, Date.now(), id);
 }
 
 /* ---------- refresh old posts ---------- */
 
 /** Newest still-visible posts of a server (for /setup refreshposts). */
-export function listRecentPosted(guildId, limit) {
-  return db
-    .prepare("SELECT * FROM confessions WHERE guild_id = ? AND status = 'posted' AND message_id IS NOT NULL AND channel_id IS NOT NULL ORDER BY id DESC LIMIT ?")
-    .all(guildId, limit);
+export async function listRecentPosted(guildId, limit) {
+  return await all("SELECT * FROM confessions WHERE guild_id = ? AND status = 'posted' AND message_id IS NOT NULL AND channel_id IS NOT NULL ORDER BY id DESC LIMIT ?", guildId, limit);
 }
 
 /* ---------- auto-filter rules ---------- */
 
-export function addFilterRule(guildId, kind, pattern) {
-  const r = db.prepare('INSERT INTO filter_rules (guild_id, kind, pattern, created_at) VALUES (?, ?, ?, ?)').run(guildId, kind, pattern, Date.now());
-  return Number(r.lastInsertRowid);
+export async function addFilterRule(guildId, kind, pattern) {
+  const { id } = await get(
+    'INSERT INTO filter_rules (guild_id, kind, pattern, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    guildId, kind, pattern, Date.now(),
+  );
+  return id;
 }
 
-export function listFilterRules(guildId) {
-  return db.prepare('SELECT * FROM filter_rules WHERE guild_id = ? ORDER BY id').all(guildId);
+export async function listFilterRules(guildId) {
+  return await all('SELECT * FROM filter_rules WHERE guild_id = ? ORDER BY id', guildId);
 }
 
-export function removeFilterRule(guildId, id) {
-  return db.prepare('DELETE FROM filter_rules WHERE guild_id = ? AND id = ?').run(guildId, id).changes > 0;
+export async function removeFilterRule(guildId, id) {
+  return await run('DELETE FROM filter_rules WHERE guild_id = ? AND id = ?', guildId, id) > 0;
 }
 
 /* ---------- user preferences (global, not per server) ---------- */
 
-export function getPrefs(userId) {
-  return db.prepare('SELECT notify_off, preview FROM user_prefs WHERE user_id = ?').get(userId) ?? { notify_off: 0, preview: 0 };
+export async function getPrefs(userId) {
+  return await get('SELECT notify_off, preview FROM user_prefs WHERE user_id = ?', userId) ?? { notify_off: 0, preview: 0 };
 }
 
 /** `field` is 'notify_off' or 'preview'. */
-export function setPref(userId, field, value) {
+export async function setPref(userId, field, value) {
   if (field !== 'notify_off' && field !== 'preview') throw new Error(`Bad pref: ${field}`);
-  db.prepare('INSERT OR IGNORE INTO user_prefs (user_id) VALUES (?)').run(userId);
-  db.prepare(`UPDATE user_prefs SET ${field} = ? WHERE user_id = ?`).run(value ? 1 : 0, userId);
+  await run(
+    `INSERT INTO user_prefs (user_id, ${field}) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET ${field} = excluded.${field}`,
+    userId, value ? 1 : 0,
+  );
 }
 
 /* ---------- poll closing ---------- */
 
-export function closePollRow(id) {
-  return db.prepare('UPDATE confessions SET poll_closed_at = ? WHERE id = ? AND poll_closed_at IS NULL').run(Date.now(), id).changes > 0;
+export async function closePollRow(id) {
+  return await run('UPDATE confessions SET poll_closed_at = ? WHERE id = ? AND poll_closed_at IS NULL', Date.now(), id) > 0;
 }
 
 /** Open polls whose end time has passed. */
-export function listDuePolls(now = Date.now()) {
-  return db
-    .prepare("SELECT * FROM confessions WHERE is_poll = 1 AND poll_closed_at IS NULL AND poll_ends_at IS NOT NULL AND poll_ends_at <= ? AND status = 'posted'")
-    .all(now);
+export async function listDuePolls(now = Date.now()) {
+  return await all("SELECT * FROM confessions WHERE is_poll = 1 AND poll_closed_at IS NULL AND poll_ends_at IS NOT NULL AND poll_ends_at <= ? AND status = 'posted'", now);
 }
 
 /* ---------- featured channel ---------- */
 
-export function setFeatured(id, channelId, messageId) {
-  db.prepare('UPDATE confessions SET featured_channel_id = ?, featured_message_id = ? WHERE id = ?').run(channelId, messageId, id);
+export async function setFeatured(id, channelId, messageId) {
+  await run('UPDATE confessions SET featured_channel_id = ?, featured_message_id = ? WHERE id = ?', channelId, messageId, id);
 }
 
 /* ---------- reply threads ---------- */
 
-export function setThread(id, threadId) {
-  db.prepare('UPDATE confessions SET thread_id = ? WHERE id = ?').run(threadId, id);
+export async function setThread(id, threadId) {
+  await run('UPDATE confessions SET thread_id = ? WHERE id = ?', threadId, id);
 }
 
-export function setAlias(id, alias) {
-  db.prepare('UPDATE confessions SET alias = ? WHERE id = ?').run(alias, id);
+export async function setAlias(id, alias) {
+  await run('UPDATE confessions SET alias = ? WHERE id = ?', alias, id);
 }
 
 /** This person's number in the thread under post `rootId` (1, 2, 3... in order of first reply). `userKey` is their key. */
-export function threadAlias(rootId, userKey) {
-  const found = db.prepare('SELECT alias FROM thread_aliases WHERE root_id = ? AND user_key = ?').get(rootId, userKey);
-  if (found) return found.alias;
-  const { next } = db.prepare('SELECT COALESCE(MAX(alias), 0) + 1 AS next FROM thread_aliases WHERE root_id = ?').get(rootId);
-  db.prepare('INSERT INTO thread_aliases (root_id, user_key, alias) VALUES (?, ?, ?)').run(rootId, userKey, next);
-  return next;
+export async function threadAlias(rootId, userKey) {
+  return await transaction(async () => {
+    await lock(`alias:${rootId}`); // two first replies must not get the same number
+    const found = await get('SELECT alias FROM thread_aliases WHERE root_id = ? AND user_key = ?', rootId, userKey);
+    if (found) return found.alias;
+    const { next } = await get('SELECT COALESCE(MAX(alias), 0) + 1 AS next FROM thread_aliases WHERE root_id = ?', rootId);
+    await run('INSERT INTO thread_aliases (root_id, user_key, alias) VALUES (?, ?, ?)', rootId, userKey, next);
+    return next;
+  });
 }
 
 /* ---------- moderator views: queue, search, stats ---------- */
 
-function page(where, args, order, limit, offset) {
-  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM confessions WHERE ${where}`).get(...args);
-  const rows = db.prepare(`SELECT * FROM confessions WHERE ${where} ORDER BY id ${order} LIMIT ? OFFSET ?`).all(...args, limit, offset);
+async function page(where, args, order, limit, offset) {
+  const { n } = await get(`SELECT COUNT(*) AS n FROM confessions WHERE ${where}`, ...args);
+  const rows = await all(`SELECT * FROM confessions WHERE ${where} ORDER BY id ${order} LIMIT ? OFFSET ?`, ...args, limit, offset);
   return { rows, total: n };
 }
 
 /** Posts waiting for approval, hidden after reports, or saved until posting resumes. Oldest first. */
-export function listQueue(guildId, limit, offset = 0) {
-  return page("guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')", [guildId], 'ASC', limit, offset);
+export async function listQueue(guildId, limit, offset = 0) {
+  return await page("guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')", [guildId], 'ASC', limit, offset);
 }
 
 /** `filters` = { text, tag, status, since }, all optional. Newest first. Never filters by author. */
-export function searchConfessions(guildId, { text, tag, status, since } = {}, limit = 10, offset = 0) {
+export async function searchConfessions(guildId, { text, tag, status, since } = {}, limit = 10, offset = 0) {
   const where = ['guild_id = ?'];
   const args = [guildId];
   if (text) {
-    where.push("(content LIKE ? ESCAPE '\\' OR cw LIKE ? ESCAPE '\\')");
+    where.push("(content ILIKE ? ESCAPE '\\' OR cw ILIKE ? ESCAPE '\\')"); // ILIKE: any letter case
     const like = `%${text.replace(/[\\%_]/g, '\\$&')}%`;
     args.push(like, like);
   }
@@ -988,28 +634,31 @@ export function searchConfessions(guildId, { text, tag, status, since } = {}, li
     where.push('created_at >= ?');
     args.push(since);
   }
-  return page(where.join(' AND '), args, 'DESC', limit, offset);
+  return await page(where.join(' AND '), args, 'DESC', limit, offset);
 }
 
 /** Server-wide totals for posts created since `since`, plus what is waiting right now. */
-export function guildStats(guildId, since) {
-  const one = (sql, ...args) => db.prepare(sql).get(...args);
+export async function guildStats(guildId, since) {
   const recent = 'FROM confessions WHERE guild_id = ? AND created_at >= ?';
-  const totals = one(
-    `SELECT COALESCE(SUM(reply_to IS NOT NULL), 0) AS replies, COALESCE(SUM(is_poll), 0) AS polls, COALESCE(SUM(has_image), 0) AS images ${recent}`,
+  const totals = await get(
+    `SELECT COUNT(*) FILTER (WHERE reply_to IS NOT NULL) AS replies, COALESCE(SUM(is_poll), 0) AS polls, COALESCE(SUM(has_image), 0) AS images ${recent}`,
     guildId, since,
   );
-  const waiting = one("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM confessions WHERE guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')", guildId);
+  const waiting = await get(
+    "SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM confessions WHERE guild_id = ? AND status IN ('pending', 'hidden', 'scheduled')",
+    guildId,
+  );
+  const byStatus = await all(`SELECT status, COUNT(*) AS n ${recent} GROUP BY status`, guildId, since);
   return {
     ...totals,
-    byStatus: new Map(db.prepare(`SELECT status, COUNT(*) AS n ${recent} GROUP BY status`).all(guildId, since).map((r) => [r.status, r.n])),
-    topics: db.prepare(`SELECT tag, COUNT(*) AS n ${recent} GROUP BY tag ORDER BY n DESC, tag LIMIT 5`).all(guildId, since),
-    reports: one(
+    byStatus: new Map(byStatus.map((r) => [r.status, r.n])),
+    topics: await all(`SELECT tag, COUNT(*) AS n ${recent} GROUP BY tag ORDER BY n DESC, tag COLLATE "C" NULLS FIRST LIMIT 5`, guildId, since),
+    reports: (await get(
       'SELECT COUNT(*) AS n FROM reports r JOIN confessions c ON c.id = r.confession_id WHERE c.guild_id = ? AND r.created_at >= ?',
       guildId, since,
-    ).n,
-    warnings: one('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND created_at >= ?', guildId, since).n,
-    activeBans: one('SELECT COUNT(*) AS n FROM bans WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > ?)', guildId, Date.now()).n,
+    )).n,
+    warnings: (await get('SELECT COUNT(*) AS n FROM warnings WHERE guild_id = ? AND created_at >= ?', guildId, since)).n,
+    activeBans: (await get('SELECT COUNT(*) AS n FROM bans WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > ?)', guildId, Date.now())).n,
     waiting: waiting.n,
     oldestWaiting: waiting.oldest,
   };
@@ -1018,27 +667,24 @@ export function guildStats(guildId, since) {
 /* ---------- submissions saved while posting is on hold ---------- */
 
 /** This person's submissions that are not up yet (saved for later, or waiting for approval). */
-export function countWaiting(guildId, userId) {
-  return db
-    .prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND author_key = ? AND status IN ('pending', 'scheduled')")
-    .get(guildId, keyOf(guildId, userId)).n;
+export async function countWaiting(guildId, userId) {
+  return (await get("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND author_key = ? AND status IN ('pending', 'scheduled')", guildId, keyOf(guildId, userId))).n;
 }
 
-export function countScheduled(guildId) {
-  return db.prepare("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'scheduled'").get(guildId).n;
+export async function countScheduled(guildId) {
+  return (await get("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'scheduled'", guildId)).n;
 }
 
 /** Saved submissions in the order they were sent. */
-export function listScheduled(guildId) {
-  return db.prepare("SELECT * FROM confessions WHERE guild_id = ? AND status = 'scheduled' ORDER BY id").all(guildId);
+export async function listScheduled(guildId) {
+  return await all("SELECT * FROM confessions WHERE guild_id = ? AND status = 'scheduled' ORDER BY id", guildId);
 }
 
-export function guildsWithScheduled() {
-  return db.prepare("SELECT DISTINCT guild_id FROM confessions WHERE status = 'scheduled'").all().map((r) => r.guild_id);
+export async function guildsWithScheduled() {
+  return (await all("SELECT DISTINCT guild_id FROM confessions WHERE status = 'scheduled'")).map((r) => r.guild_id);
 }
 
 /** Count a refused attempt to post a saved submission. Returns how many there have been. */
-export function addReleaseTry(id) {
-  db.prepare('UPDATE confessions SET release_tries = release_tries + 1 WHERE id = ?').run(id);
-  return db.prepare('SELECT release_tries AS n FROM confessions WHERE id = ?').get(id).n;
+export async function addReleaseTry(id) {
+  return (await get('UPDATE confessions SET release_tries = release_tries + 1 WHERE id = ? RETURNING release_tries AS n', id)).n;
 }

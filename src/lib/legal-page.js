@@ -1,6 +1,7 @@
-// Markup, style and browser script of the legal page. Self-contained: no external fonts, scripts or trackers.
+// Markup, style and browser script of the web page. Self-contained: no external fonts, scripts or trackers.
 // It reads like a dictionary entry for STFW, with the sections as numbered senses.
-// Without JavaScript both documents simply show one after the other.
+// Each document is a tab with its own address ("/" for the first, "/<id>" for the rest, "#<id>-<n>" for a section).
+// Without JavaScript the documents simply show one after the other.
 
 import { readFileSync } from 'node:fs';
 
@@ -13,100 +14,119 @@ const LOGO_HEIGHT = 292;
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const STYLE = String.raw`
-  /* One radius family, always nested: outer 20 = inner 12 + padding 8; segmented control 12 = thumb 8 + padding 4. */
+  /* One radius family, always nested: outer 20 = inner 12 + padding 8. Controls sit straight on their card: no tracks. */
   :root {
     color-scheme: light;
     --bg: #f5f0f2; --card: #fff; --inner: #f5f0f2; --ink: #241a1d; --muted: #685359; --accent: #821b33; --fill: #821b33;
-    --marker: #f0a03c; --ring: rgb(80 20 35 / .09); --track: #d9cdd1; --on: 0;
-    --lift: 0 0 0 1px var(--ring), 0 1px 2px rgb(80 20 35 / .05), 0 10px 24px -16px rgb(80 20 35 / .25);
+    --marker: #f0a03c; --on-marker: #4a2605; --ring: rgb(80 20 35 / .09); --track: #d9cdd1; --on: 0;
+    --lift: 0 0 0 1px var(--ring), 0 2px 4px rgb(80 20 35 / .05), 0 12px 24px -16px rgb(80 20 35 / .16);
+    --knob: 0 0 0 1px rgb(0 0 0 / .06), 0 1px 2px rgb(0 0 0 / .16), 0 2px 6px rgb(0 0 0 / .12);
     --r1: 20px; --r2: 12px; --r3: 8px;
+    /* Motion: press and hover, switch knob and chevron, list open and close, note in and out, icon swap. */
+    --t-press: 150ms; --t-move: 200ms; --t-open: 250ms; --t-close: 190ms; --t-note-in: 125ms; --t-note-out: 90ms; --t-swap: 300ms;
+    --ease-out: cubic-bezier(.32, .72, 0, 1); --ease-in: cubic-bezier(.55, 0, 1, .45); --ease-in-out: cubic-bezier(.77, 0, .175, 1);
+    --ease-swap: cubic-bezier(.25, .1, 0, 1);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: #f08da2; --fill: #9c2a46;
-      --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
+      --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: oklch(.75 .105 13); --fill: oklch(.47 .105 13); --marker: oklch(.768 .11 68);
+      --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring), 0 2px 4px rgb(0 0 0 / .16), 0 12px 24px -16px rgb(0 0 0 / .16);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: #f08da2; --fill: #9c2a46;
-    --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
+    --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: oklch(.75 .105 13); --fill: oklch(.47 .105 13); --marker: oklch(.768 .11 68);
+    --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring), 0 2px 4px rgb(0 0 0 / .16), 0 12px 24px -16px rgb(0 0 0 / .16);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased; }
   [hidden] { display: none !important; }
   .wrap { max-width: 64rem; margin: 0 auto; padding-inline: 1rem; }
-  :focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .sr, .js h2 { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   button, input { font: inherit; color: inherit; }
+  button, input, .toggle, .toc a, .toc summary, .action, footer a { line-height: 1.4; }
   button { cursor: pointer; background: none; border: 0; padding: 0; white-space: nowrap; }
   h3 { text-wrap: balance; }
   p, li { text-wrap: pretty; }
 
-  header { padding-top: 3rem; padding-bottom: 1.5rem; }
+  header { padding-top: 2rem; padding-bottom: 1.5rem; }
   /* The two official logos sit on top of each other and the theme picks one, so nothing flashes or moves. */
   h1 { display: grid; width: clamp(11rem, 40vw, 16rem); margin: 0 0 1.25rem; }
+  h1 a { display: grid; border-radius: var(--r3); }
   h1 img { grid-area: 1 / 1; width: 100%; height: auto; }
   .logo-light { opacity: calc(1 - var(--on)); }
   .logo-dark { opacity: var(--on); }
   header p { margin: .75rem 0 0; max-width: 40rem; }
   .say { color: var(--muted); }
   .sense { font-size: 1.15rem; line-height: 1.5; }
-  .sense b { font-weight: 600; color: var(--accent); }
-  .updated { color: var(--muted); font-size: .875rem; }
+  .sense b { font-weight: 400; color: var(--accent); }
+  header .say + .sense { margin-top: 0; }
+  header .updated { margin-top: 14px; color: var(--muted); font-size: .875rem; }
 
   .card, article { background: var(--card); border-radius: var(--r1); padding: 8px; box-shadow: var(--lift); }
 
   /* Toolbar */
   .bar { position: sticky; top: 0; z-index: 5; padding-block: 8px; background: var(--bg); }
   .tools { display: grid; grid-template: "tabs search examples theme" / auto minmax(0, 1fr) auto auto; gap: 8px; }
-  .tabs, .who fieldset { position: relative; grid-auto-flow: column; grid-auto-columns: 1fr; margin: 0; padding: 4px; border: 0;
-    border-radius: var(--r2); background: var(--inner); isolation: isolate; }
+  .tabs, .who fieldset { position: relative; grid-auto-flow: column; grid-auto-columns: 1fr; margin: 0; padding: 0; border: 0;
+    isolation: isolate; }
   .tabs { grid-area: tabs; display: grid; }
-  /* The sliding thumb under the picked segment. --i is the picked index. */
-  .tabs::before, .who fieldset::before { content: ""; position: absolute; z-index: -1; top: 4px; bottom: 4px; left: 4px;
-    width: calc((100% - 8px) / var(--n)); border-radius: var(--r3); background: var(--fill); transform: translateX(calc(var(--i, 0) * 100%)); }
-  .tabs { --n: 3; }
-  .tabs button { position: relative; height: 36px; padding-inline: 1rem; border-radius: var(--r3); color: var(--muted); }
-  .tabs button::after { content: ""; position: absolute; inset: -4px 0; }
-  .tabs button[aria-selected="true"] { color: #fff; }
-  input[type="search"] { grid-area: search; width: 100%; min-width: 0; height: 44px; padding-inline: 1rem; border: 0; border-radius: var(--r2);
-    background: var(--inner); }
+  /* The sliding pill under the picked segment. --i is the picked index. It is tinted, so the filled button stays the one standout. */
+  .tabs::before, .who fieldset::before { content: ""; position: absolute; z-index: -1; top: 0; bottom: 0; left: 0;
+    width: calc(100% / var(--n)); border-radius: var(--r2); background: color-mix(in srgb, var(--accent) 14%, var(--card));
+    transform: translateX(calc(var(--i, 0) * 100%)); }
+  .tabs button { position: relative; height: 44px; padding-inline: 1.375rem; border-radius: var(--r2); color: var(--muted); }
+  .tabs button[aria-selected="true"] { color: var(--accent); }
+  input[type="search"] { grid-area: search; width: 100%; min-width: 0; height: 44px; padding: 0 22px 0 44px; border: 0; border-radius: var(--r2);
+    background: var(--inner) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a7479' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E") 16px center / 18px no-repeat; }
   input::placeholder { color: var(--muted); }
   .toggle { grid-area: examples; display: flex; align-items: center; justify-content: space-between; gap: .75rem; height: 44px;
-    padding: 0 10px 0 1rem; border-radius: var(--r2); background: var(--inner); cursor: pointer; user-select: none; white-space: nowrap; }
+    padding-inline: 8px; border-radius: var(--r2); cursor: pointer; user-select: none; white-space: nowrap; }
   .toggle input { appearance: none; position: relative; flex: none; width: 40px; height: 24px; margin: 0; border-radius: 12px;
     background: var(--track); cursor: inherit; }
   .toggle input::after { content: ""; position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
-    box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+    box-shadow: var(--knob); }
   .toggle input:checked { background: var(--fill); }
   .toggle input:checked::after { transform: translateX(16px); }
-  .toggle:has(input:disabled) { opacity: .45; cursor: default; }
-  /* Theme switch: position and icon colors come from the theme tokens, so it is right before any script runs. */
-  #theme { grid-area: theme; display: grid; place-items: center; width: 72px; height: 44px; border-radius: var(--r2); background: var(--inner); }
-  .track { position: relative; display: flex; width: 56px; height: 32px; padding: 4px; border-radius: 16px; background: var(--track); }
-  .knob { position: absolute; top: 4px; left: 4px; width: 24px; height: 24px; border-radius: 50%; background: var(--card);
-    box-shadow: 0 1px 3px rgb(0 0 0 / .3); transform: translateX(calc(var(--on) * 24px)); }
-  .track svg { position: relative; width: 24px; height: 24px; padding: 4px; fill: none; stroke: currentColor; stroke-width: 2;
-    stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-  .track .sun { color: color-mix(in srgb, var(--accent) calc((1 - var(--on)) * 100%), var(--ink)); }
-  .track .moon { color: color-mix(in srgb, var(--accent) calc(var(--on) * 100%), var(--ink)); }
+  /* Theme button: the theme tokens pick the icon (moon in light, sun in dark), so it is right before any script runs. */
+  #theme { grid-area: theme; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r2); color: var(--muted); }
+  #theme svg { grid-area: 1 / 1; width: 20px; height: 20px; }
+  #theme .sun { opacity: var(--on); scale: calc(.3 + .7 * var(--on)); filter: blur(calc((1 - var(--on)) * 3px)); }
+  #theme .moon { opacity: calc(1 - var(--on)); scale: calc(1 - .7 * var(--on)); filter: blur(calc(var(--on) * 3px)); }
+  /* Lucide icons. */
+  .icon { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+    stroke-linejoin: round; pointer-events: none; }
 
-  main { display: grid; gap: 16px; padding-top: 8px; padding-bottom: 16px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding-top: 8px; padding-bottom: 16px; }
   nav.toc { display: none; }
+  .js nav.toc { display: block; }
+  /* On narrow screens the contents list is one row that opens in place. */
+  .toc summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding-inline: 1.375rem;
+    border-radius: var(--r2); cursor: pointer; list-style: none; }
+  .toc summary::-webkit-details-marker { display: none; }
+  .toc summary .icon { color: var(--accent); }
+  .toc.shown summary .icon { rotate: 180deg; }
+  .expander { display: grid; grid-template-rows: 0fr; }
+  .toc.shown .expander { grid-template-rows: 1fr; }
+  .expander > div { min-height: 0; overflow: hidden; }
+  .toc a:focus-visible { outline-offset: -2px; }
   @media (min-width: 56rem) {
     .js main { grid-template-columns: 17rem minmax(0, 1fr); align-items: start; }
-    .js nav.toc { display: block; position: sticky; top: 76px; max-height: calc(100vh - 84px); overflow: auto; }
+    .js nav.toc { position: sticky; top: 76px; max-height: calc(100vh - 84px); overflow: auto; }
+    .toc summary { display: none; }
+    .expander { grid-template-rows: 1fr; }
+    .expander > div { overflow: visible; }
   }
   .toc ol { list-style: none; margin: 0; padding: 0; }
-  .toc a { display: block; padding: .6rem .75rem; border-radius: var(--r2); color: var(--muted); text-decoration: none; font-size: .875rem; line-height: 1.4; }
+  .toc a { display: block; padding: .65rem 1.3rem; border-radius: var(--r2); color: var(--muted); text-decoration: none; font-size: .875rem; line-height: 1.4; }
   .toc a[aria-current="true"] { background: var(--inner); color: var(--accent); }
   li + li { margin-top: .5rem; }
   .toc li + li { margin-top: 2px; }
 
-  h2 { font-size: 1.5rem; font-weight: 600; }
+  h2 { margin: 48px 0 8px; font-size: 1.5rem; font-weight: 600; line-height: 1.2; }
   .doc + .doc { margin-top: 4rem; }
   .js .doc + .doc { margin-top: 0; }
   article { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 4px; margin-bottom: 16px; scroll-margin-top: 80px; }
@@ -115,24 +135,54 @@ const STYLE = String.raw`
   .num { grid-column: 1; grid-row: 1; position: relative; display: grid; place-items: center; width: 40px; height: 40px;
     border-radius: var(--r2); background: var(--inner); color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; text-decoration: none; }
   article.here .num { background: var(--fill); color: #fff; }
-  .num[data-note]::after { content: attr(data-note); position: absolute; left: 0; top: calc(100% + 4px); z-index: 1; padding: .25rem .5rem;
-    border-radius: var(--r3); background: var(--ink); color: var(--bg); font-size: .75rem; font-weight: 400; line-height: 1.5; white-space: nowrap; }
-  h3 { grid-row: 1; align-self: center; margin: 0; padding: .25rem .75rem; font-size: 1.15rem; font-weight: 600; line-height: 1.4; }
+  .num::before { content: ""; position: absolute; inset: -2px; }
+  .num::after { content: attr(data-note); position: absolute; left: 0; top: calc(100% + 4px); z-index: 1; padding: .25rem .5rem;
+    border-radius: var(--r3); background: var(--ink); color: var(--bg); font-size: .75rem; font-weight: 400; line-height: 1.5;
+    white-space: nowrap; opacity: 0; scale: .97; transform-origin: top left; pointer-events: none; }
+  .num[data-show]::after { opacity: 1; scale: 1; }
+  h3 { grid-row: 1; align-self: center; margin: 0; padding: .25rem .75rem; font-size: 1.15rem; font-weight: 600; line-height: 1.25; }
   article p { margin: 0; padding: .25rem .75rem .75rem; max-width: 40rem; }
   article ul { margin: 0; padding: .25rem .75rem .75rem 1.9rem; max-width: 42rem; }
   article aside { grid-column: 1 / -1; padding: .75rem 1rem .75rem 3.5rem; border-radius: var(--r2); background: var(--inner); color: var(--muted); }
   article a:not(.num) { color: var(--accent); text-underline-offset: 3px; }
+  /* A taller target for links inside text, without moving the lines. */
+  article p a { padding-block: .65rem; }
+  .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
+  .js:not([data-page="home"]) .cta { display: none; }
+  .action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 48px; padding-inline: 24px;
+    border-radius: var(--r2); background: var(--card); box-shadow: var(--lift); color: var(--accent); font-weight: 600;
+    text-decoration: none; }
+  .action:first-child { background: var(--fill); color: #fff; }
+  code { padding: .1rem .35rem; border-radius: var(--r3); background: var(--inner); font-size: .875em; overflow-wrap: anywhere; }
+  .ui { font-weight: 600; white-space: nowrap; }
+  .hint { display: none; margin: 0 0 8px; padding-inline: .75rem; color: var(--muted); font-size: .875rem; }
+  .js .hint { display: block; }
+
+  .js[data-page="home"] nav.toc { display: none; }
+  .js[data-page="home"] main { grid-template-columns: minmax(0, 1fr); }
+  .sample { display: none; margin: 0; }
+  .sample.post { margin: 0; padding: 1rem 1.25rem; background: var(--card); box-shadow: var(--lift); }
+  .by { display: flex; align-items: center; gap: .5rem; margin-top: .75rem !important; font-size: .875rem; }
+  .by span { padding: .1rem .5rem; border-radius: var(--r3); background: var(--ink); color: var(--bg); user-select: none; }
+  @media (min-width: 56rem) {
+    .js[data-page="home"] header { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; align-items: center; gap: 48px; }
+    .js[data-page="home"] header .sample { display: block; }
+    #home { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 16px; }
+    #home article { align-content: start; }
+    #home article p { grid-column: 1 / -1; }
+    #home article:nth-of-type(4), #home .elsewhere { grid-column: 1 / -1; }
+  }
+  @media (max-width: 55.99rem) { #home .sample { display: block; margin-bottom: 16px; } }
 
   .who { margin-bottom: 16px; }
   .who h3 { padding: .5rem .75rem .75rem; }
   .who fieldset { display: none; --n: 2; }
   .js .who fieldset { display: grid; }
-  .who label { position: relative; display: grid; place-items: center; min-height: 36px; padding: 0 .25rem; border-radius: var(--r3);
+  .who label { position: relative; display: grid; place-items: center; min-height: 44px; padding: 0 .25rem; border-radius: var(--r2);
     color: var(--muted); cursor: pointer; font-size: .875rem; line-height: 1.2; text-align: center; }
-  .who label::after { content: ""; position: absolute; inset: -4px 0; }
   .who input { position: absolute; opacity: 0; pointer-events: none; }
-  .who label:has(input:checked) { color: #fff; }
-  .who label:has(input:focus-visible) { outline: 2px solid var(--marker); outline-offset: 2px; }
+  .who label:has(input:checked) { color: var(--accent); }
+  .who label:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
   .post { margin-top: 8px; padding: .75rem 1rem; border-left: 4px solid var(--accent); border-radius: var(--r2); background: var(--inner); }
   .post p { margin: 0; }
   .post b { font-weight: 600; }
@@ -143,46 +193,78 @@ const STYLE = String.raw`
   .answers { margin: 0; padding: .75rem; list-style: none; }
   .js .answers { min-height: 4.7rem; }
   .js .answers b { display: none; }
-  mark { background: var(--marker); color: #241a1d; }
+  mark { background: var(--marker); color: var(--on-marker); }
   .empty { padding-inline: .75rem; color: var(--muted); }
+  .elsewhere { display: flex; flex-wrap: wrap; gap: 8px; }
+  .elsewhere button { min-height: 44px; padding-inline: 22px; border-radius: var(--r2); background: var(--card); box-shadow: var(--lift);
+    color: var(--accent); }
+  /* Past the home page the definition steps aside, so the document starts higher. */
+  .js:not([data-page="home"]) header .say, .js:not([data-page="home"]) header .sense { display: none; }
+  .js:not([data-page="home"]) header { padding-top: 1.5rem; padding-bottom: .5rem; }
+  .js:not([data-page="home"]) h1 { width: 8rem; margin-bottom: 0; }
 
   footer { padding-bottom: 3rem; }
   footer p { margin: 0; padding: .25rem .75rem .75rem; color: var(--muted); font-size: .875rem; }
   footer ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
   footer li + li { margin: 0; }
-  footer a { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding-inline: 1rem; border-radius: var(--r2);
+  footer a { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding-inline: 22px; border-radius: var(--r2);
     background: var(--inner); color: var(--accent); text-decoration: none; }
-  footer a::after { content: "↗" / ""; }
 
-  /* Motion and feedback. Transitions switch on after the first paint, and only ever move things. */
-  .ready .tabs::before, .ready .who fieldset::before, .ready .knob, .ready .toggle input::after { transition: transform .2s cubic-bezier(.65, 0, .35, 1); }
-  .tabs button, .num, #theme, .who label, footer a, .toc a { transition: scale .12s ease; }
-  .tabs button:active, .num:active, #theme:active, .who label:active, footer a:active, .toc a:active { scale: .96; }
-  @media (hover: hover) {
+  /* Motion and feedback. Transitions start after the first paint, and are off for keyboard use: tabs and keys answer on the
+     next frame. Colors never fade across a theme swap. */
+  .ready:not(.keys) :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button) {
+    transition: scale var(--t-press) var(--ease-out), background-color var(--t-press) ease, filter var(--t-press) ease,
+      box-shadow var(--t-press) ease; }
+  .ready.swapping :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button) {
+    transition: none; }
+  .ready:not(.keys) .toggle input::after { transition: transform var(--t-move) var(--ease-in-out); }
+  .ready:not(.keys) #theme svg { transition: opacity var(--t-swap) var(--ease-swap), scale var(--t-swap) var(--ease-swap),
+    filter var(--t-swap) var(--ease-swap); }
+  .ready:not(.keys) .expander { transition: grid-template-rows var(--t-close) var(--ease-in-out); }
+  .ready:not(.keys) .toc.shown .expander { transition-duration: var(--t-open); }
+  .ready:not(.keys) .toc summary .icon { transition: rotate var(--t-move) var(--ease-in-out); }
+  .ready:not(.keys) .num::after { transition: opacity var(--t-note-out) var(--ease-in), scale var(--t-note-out) var(--ease-in); }
+  .ready:not(.keys) .num[data-show]::after { transition: opacity var(--t-note-in) var(--ease-out), scale var(--t-note-in) var(--ease-out); }
+  @media (hover: hover) and (pointer: fine) {
     .tabs button[aria-selected="false"]:hover, .who label:not(:has(input:checked)):hover { color: var(--ink); }
     .toc a:hover { background: var(--inner); color: var(--ink); }
     .toc a[aria-current="true"]:hover { color: var(--accent); }
-    #theme:hover, .toggle:hover:not(:has(input:disabled)), .num:hover, footer a:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+    .num:hover, footer a:hover, .toc summary:hover, .elsewhere button:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+    #theme:hover, .toggle:hover { background: var(--inner); color: var(--ink); }
+    .action:first-child:hover { filter: brightness(1.12); }
+    .action:not(:first-child):hover { box-shadow: inset 0 0 0 1px var(--accent); }
   }
+  /* Press: small controls shrink; wide surfaces and the toolbar change color instead. */
+  .num:active, .action:active, .elsewhere button:active { scale: .96; }
+  .tabs button:active, #theme:active, .who label:active, footer a:active, .toc a:active, .toc summary:active,
+  .action:not(:first-child):active { background-color: color-mix(in srgb, var(--accent) 22%, var(--card)); }
+  .action:first-child:active { filter: brightness(.88); }
+  @media (max-width: 40rem) { .action:active { scale: 1; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
 
+  @media (max-width: 56rem) {
+    .tools { grid-template: "tabs tabs theme" "search search examples" / minmax(0, 1fr) auto auto; }
+    .tools #theme { justify-self: end; }
+    .tools:has(.toggle[hidden]) #search { grid-column: 1 / -1; }
+    .tools:has(#search[hidden]) { grid-template: "tabs tabs theme" / minmax(0, 1fr) auto auto; }
+    article { scroll-margin-top: 132px; }
+  }
   @media (max-width: 40rem) {
     header { padding-top: 1.5rem; padding-bottom: .5rem; }
     header p { margin-top: .4rem; }
+    h1 { width: 8rem; margin-bottom: .5rem; }
     .sense { font-size: 1rem; }
-    .tools { grid-template: "tabs tabs theme" "search search examples" / minmax(0, 1fr) auto auto; }
-    .tools #theme { justify-self: end; }
+    .action { flex: 1 0 100%; }
     .toggle { gap: .5rem; padding-left: .75rem; font-size: .875rem; }
     .long { display: none; }
     .tabs button { padding-inline: .25rem; font-size: .875rem; }
-    article { scroll-margin-top: 132px; }
     article p { grid-column: 1 / -1; }
     article ul { grid-column: 1 / -1; padding-left: 2rem; }
     article aside { padding-left: .75rem; }
     .js .answers { min-height: 6.4rem; }
     .who label { font-size: .75rem; padding: 0; white-space: nowrap; }
   }
-  @media print { .bar, .toc { display: none !important; } .doc, aside, .answers li { display: block !important; } .who fieldset, .sent { display: none !important; } .answers b { display: inline !important; } article { display: grid !important; } main { display: block; } .card, article { box-shadow: none; } }
+  @media print { .bar, .toc, .hint, .elsewhere { display: none !important; } .doc, aside, .answers li { display: block !important; } .who fieldset, .sent { display: none !important; } .answers b { display: inline !important; } article { display: grid !important; } main { display: block; } .card, article { box-shadow: none; } }
 `;
 
 // Runs in the browser. Kept free of backticks so it can sit inside String.raw.
@@ -194,11 +276,53 @@ const SCRIPT = String.raw`
   var docs = $$('.doc'), tabs = $$('[role="tab"]'), tocs = $$('.toc ol');
   var search = $('#search'), examples = $('#examples'), theme = $('#theme');
   var current = docs[0].id, picked = null;
+  var contents = $('.toc details'), wide = matchMedia('(min-width: 56rem)');
 
   function save(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+  function saved(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+  // Keys answer at once; a pointer or finger gets the transitions back.
+  addEventListener('keydown', function () { root.classList.add('keys'); }, true);
+  addEventListener('pointerdown', function () { root.classList.remove('keys'); }, true);
+
+  // The contents list stays open beside the text, and starts closed above it. There it opens and closes in place, and can be
+  // turned around halfway.
+  var toc = $('.toc'), summary = $('.toc summary'), list = $('.toc .expander > div'), closing;
+  var still = matchMedia('(prefers-reduced-motion: reduce)');
+  function fit() {
+    clearTimeout(closing);
+    toc.classList.remove('shown');
+    list.inert = false;
+    contents.open = wide.matches;
+  }
+  function unfold(open) {
+    clearTimeout(closing);
+    if (open) {
+      contents.open = true;
+      void list.offsetHeight; // lays the closed list out first, so it has a height to grow from
+    }
+    toc.classList.toggle('shown', open);
+    list.inert = !open;
+    if (open) return;
+    var wait = still.matches || root.classList.contains('keys') ? 0 : parseFloat(getComputedStyle(root).getPropertyValue('--t-close'));
+    closing = setTimeout(function () { contents.open = false; }, wait);
+  }
+  summary.addEventListener('click', function (e) {
+    if (wide.matches) return;
+    e.preventDefault();
+    unfold(!toc.classList.contains('shown'));
+  });
+  toc.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || wide.matches || !toc.classList.contains('shown')) return;
+    unfold(false);
+    summary.focus();
+  });
+  wide.addEventListener('change', fit);
+  fit();
 
   function show(id) {
     current = id;
+    document.title = 'STFW · ' + document.getElementById(id).dataset.name;
     docs.forEach(function (d) { d.hidden = d.id !== id; });
     tocs.forEach(function (t) { t.hidden = t.dataset.doc !== id; });
     tabs.forEach(function (t) {
@@ -207,28 +331,47 @@ const SCRIPT = String.raw`
       t.tabIndex = on ? 0 : -1;
       if (on) t.parentElement.style.setProperty('--i', tabs.indexOf(t));
     });
-    // The examples switch stays in place (no jump) and is disabled on a document without examples.
-    examples.disabled = !$('#' + id + ' aside');
+    // Each control only shows where it has something to do: the home page is short enough to need no search.
+    var doc = document.getElementById(id);
+    root.dataset.page = id;
+    search.hidden = id === docs[0].id;
+    examples.parentElement.hidden = !$('aside', doc);
+    $('.updated').hidden = !doc.hasAttribute('data-dated');
     filter();
   }
 
-  // "#privacy" opens a document, "#privacy-3" opens it at a section.
+  function isDoc(id) { return docs.some(function (d) { return d.id === id; }); }
+
+  // "privacy" is "/privacy", "privacy-3" is "/privacy#privacy-3". The first document lives at "/".
+  function address(key) {
+    var id = key.split('-')[0];
+    return (id === docs[0].id ? '/' : '/' + id) + (key === id ? '' : '#' + key);
+  }
+
+  // The hash wins over the path, so older links such as "/legal#faq-6" still open the right place.
+  // "/legal" on its own opens the Terms, as it did before there was a home page.
   function route() {
     var hash = location.hash.slice(1);
+    var path = location.pathname.split('/')[1];
     var id = hash.split('-')[0];
-    if (!docs.some(function (d) { return d.id === id; })) return show(current);
-    if (hash !== id) search.value = '';
-    show(id);
+    if (!isDoc(id)) {
+      id = path === 'legal' ? 'terms' : isDoc(path) ? path : docs[0].id;
+      hash = id;
+    }
     var target = document.getElementById(hash);
-    picked = hash !== id && target ? target : null;
+    var key = target ? hash : id;
+    history.replaceState(null, '', address(key));
+    if (id !== current || key !== id) search.value = '';
+    show(id);
+    picked = key !== id ? target : null;
     $$('article').forEach(function (a) { a.classList.toggle('here', a === picked); });
     if (picked) picked.scrollIntoView();
     else window.scrollTo(0, 0);
     spy();
   }
 
-  function go(hash) {
-    history.pushState(null, '', '#' + hash);
+  function go(key) {
+    history.pushState(null, '', address(key));
     route();
   }
 
@@ -237,36 +380,72 @@ const SCRIPT = String.raw`
     el.normalize();
   }
 
+  // Same length in and out, so match positions still line up with the page's text.
+  function plain(s) { return s.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"'); }
+
   function highlight(el, term) {
     var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), nodes = [];
     while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('.num, .sr')) nodes.push(walker.currentNode);
     nodes.forEach(function (node) {
-      var at = node.nodeValue.toLowerCase().indexOf(term);
+      var at = plain(node.nodeValue).indexOf(term);
       while (at !== -1) {
         var hit = node.splitText(at);
         node = hit.splitText(term.length);
         var mark = document.createElement('mark');
         hit.replaceWith(mark);
         mark.appendChild(hit);
-        at = node.nodeValue.toLowerCase().indexOf(term);
+        at = plain(node.nodeValue).indexOf(term);
       }
     });
   }
 
+  function matches(a, term) {
+    return plain($$('h3, p, li' + (examples.checked ? ', aside' : ''), a)
+      .map(function (n) { return n.textContent; }).join(' '))
+      .indexOf(term) !== -1;
+  }
+
+  // When this document has no match, offers the ones that do, keeping the search.
+  function offer(box, term) {
+    function add(text, act) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.addEventListener('click', act);
+      box.appendChild(button);
+    }
+    add('Clear search', function () { search.value = ''; filter(); spy(); search.focus(); });
+    docs.slice(1).forEach(function (d) {
+      var count = $$('article', d).filter(function (a) { return matches(a, term); }).length;
+      if (d.id === current || !count) return;
+      add('Show ' + count + (count === 1 ? ' match in ' : ' matches in ') + d.dataset.name, function () {
+        var typed = search.value;
+        go(d.id);
+        search.value = typed;
+        filter();
+        spy();
+        $('[role="tab"][data-doc="' + d.id + '"]').focus();
+      });
+    });
+  }
+
   function filter() {
-    var term = search.value.trim().toLowerCase(), found = 0;
+    var term = plain(search.value.trim()), found = 0;
     var doc = document.getElementById(current);
     $$('article', doc).forEach(function (a) {
       unmark(a);
-      var text = $$('h3, p, li' + (examples.checked ? ', aside' : ''), a)
-        .map(function (n) { return n.textContent; }).join(' ').toLowerCase();
-      var hit = !term || text.indexOf(term) !== -1;
+      var hit = !term || matches(a, term);
       a.hidden = !hit;
       $('.toc a[href="#' + a.id + '"]').parentElement.hidden = !hit;
       if (hit) found++;
       if (hit && term) highlight(a, term);
     });
-    $('.empty', doc).hidden = found > 0;
+    var empty = $('.empty', doc);
+    empty.hidden = found > 0;
+    if (!found) empty.textContent = 'No section here matches “' + search.value.trim() + '”. Try a shorter word, or clear the search.';
+    var elsewhere = $('.elsewhere', doc);
+    elsewhere.textContent = '';
+    if (!found) offer(elsewhere, term);
   }
 
   // Marks the section being read in the contents list.
@@ -294,7 +473,24 @@ const SCRIPT = String.raw`
   });
 
   $$('.toc a').forEach(function (l) {
-    l.addEventListener('click', function (e) { e.preventDefault(); go(l.hash.slice(1)); });
+    l.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (!wide.matches) fit();
+      go(l.hash.slice(1));
+    });
+  });
+
+  // The hint about section numbers stays until one is used.
+  function dropHints() { $$('.hint').forEach(function (h) { h.remove(); }); }
+  if (saved('copied')) dropHints();
+
+  // Links between documents switch tabs without loading the page again. Ctrl or Shift clicks keep their usual meaning.
+  $$('a[data-page]').forEach(function (l) {
+    l.addEventListener('click', function (e) {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      go(l.dataset.page);
+    });
   });
 
   // Clicking a section number copies a link to that section.
@@ -302,10 +498,19 @@ const SCRIPT = String.raw`
     n.addEventListener('click', function (e) {
       e.preventDefault();
       history.replaceState(null, '', n.hash);
+      save('copied', '1');
+      dropHints();
       picked = n.parentElement;
       $$('article').forEach(function (a) { a.classList.toggle('here', a === picked); });
       spy();
-      var done = function (note) { n.dataset.note = note; setTimeout(function () { delete n.dataset.note; }, 1800); };
+      var done = function (note) {
+        clearTimeout(n.timer);
+        n.dataset.note = note;
+        void n.offsetWidth;
+        n.dataset.show = '';
+        $('#said').textContent = note;
+        n.timer = setTimeout(function () { delete n.dataset.show; }, 1800);
+      };
       if (!navigator.clipboard) return done('Link in address bar');
       navigator.clipboard.writeText(n.href).then(function () { done('Link copied'); }, function () { done('Link in address bar'); });
     });
@@ -322,8 +527,9 @@ const SCRIPT = String.raw`
   viewers.forEach(function (v) { v.addEventListener('change', view); });
   if (viewers.length) { viewers[0].checked = true; view(); }
 
+  function showExamples() { $$('aside').forEach(function (a) { a.hidden = !examples.checked; }); }
   examples.addEventListener('change', function () {
-    $$('aside').forEach(function (a) { a.hidden = !examples.checked; });
+    showExamples();
     filter();
     spy();
   });
@@ -334,6 +540,8 @@ const SCRIPT = String.raw`
   function label() { theme.setAttribute('aria-checked', isDark()); }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', label);
   theme.addEventListener('click', function () {
+    root.classList.add('swapping');
+    setTimeout(function () { root.classList.remove('swapping'); }, 50);
     root.dataset.theme = isDark() ? 'light' : 'dark';
     save('theme', root.dataset.theme);
     label();
@@ -350,7 +558,8 @@ const SCRIPT = String.raw`
   addEventListener('resize', spy);
   addEventListener('hashchange', route);
   addEventListener('popstate', route);
-  examples.checked = true;
+  examples.checked = false;
+  showExamples();
   label();
   route();
   spy();
@@ -362,18 +571,33 @@ const SCRIPT = String.raw`
 })();
 `;
 
-// Runs before the page paints, so a saved theme does not flash and the contents list only shows with JavaScript.
-const BOOT = `document.documentElement.className='js';try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}`;
+// Runs before the page paints, so neither a saved theme nor the wrong tab's layout flashes. Without it nothing is hidden.
+const boot = (ids) =>
+  `(function(){var d=document.documentElement,k=${JSON.stringify(ids)},p=location.pathname.split('/')[1],h=location.hash.slice(1).split('-')[0];` +
+  `d.className='js';d.dataset.page=k.indexOf(h)>-1?h:p==='legal'?'terms':k.indexOf(p)>-1?p:k[0];` +
+  `try{var t=localStorage.getItem('theme');if(t)d.dataset.theme=t}catch(e){}})()`;
 
-const icon = (name, shapes) => `<svg class="${name}" viewBox="0 0 24 24" aria-hidden="true">${shapes}</svg>`;
-const SUN = icon('sun', '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/>');
-const MOON = icon('moon', '<path d="M21 13a9 9 0 1 1-10-10 7 7 0 0 0 10 10z"/>');
+// Icons from Lucide (lucide.dev, ISC licence), inlined so the page stays a single file.
+const icon = (name, shapes) => `<svg class="icon ${name}" viewBox="0 0 24 24" aria-hidden="true">${shapes}</svg>`;
+const SUN = icon('sun', '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2M20 12h2m-13.66 5.66-1.41 1.41M19.07 4.93l-1.41 1.41"/>');
+const MOON = icon('moon', '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>');
+const CHEVRON = icon('chevron-down', '<path d="m6 9 6 6 6-6"/>');
+const EXTERNAL = icon('external-link', '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>');
+const ARROW = icon('arrow-up-right', '<path d="M7 7h10v10M7 17 17 7"/>');
 
-const external = (label, url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+const classed = (name) => (name ? ` class="${name}"` : '');
+const external = (label, url, name) => `<a${classed(name)} href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+
+// An address starting with "/" is another document of this page; anything else opens in a new tab.
+const link = (label, url, name) =>
+  url.startsWith('/')
+    ? `<a${classed(name)} href="${escapeHtml(url)}" data-page="${escapeHtml(url.slice(1))}">${label}</a>`
+    : external(label, url, name);
 
 const article = (docId, section, n) => {
   const { title, body, points, example, links = [] } = section;
-  const text = (s) => links.reduce((out, [phrase, url]) => out.replace(escapeHtml(phrase), () => external(escapeHtml(phrase), url)), escapeHtml(s));
+  const marked = (s) => escapeHtml(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b class="ui">$1</b>');
+  const text = (s) => links.reduce((out, [phrase, url]) => out.replace(escapeHtml(phrase), () => link(escapeHtml(phrase), url)), marked(s));
   return [
     `<article id="${docId}-${n}">`,
     `<a class="num" href="#${docId}-${n}" title="Copy link to this section">${n}</a>`,
@@ -398,67 +622,85 @@ const whoSeesWhat = ({ heading, post, viewers }) => `<div class="who card">
 <ul class="answers" aria-live="polite">${viewers.map((v) => `<li><b>${escapeHtml(v.name)}: </b>${escapeHtml(v.answer)}</li>`).join('')}</ul>
 </div>`;
 
+const samplePost = ({ title, text }) => `<figure class="post sample">
+<p><b>${escapeHtml(title)}</b> <small>Sample post</small></p>
+<p>${escapeHtml(text)}</p>
+<p class="by">Sent by <span>Hidden</span></p>
+</figure>`;
+
 // "Terms of Use" -> "Terms<span> of Use</span>", so narrow screens can show the first word only.
 const tabName = (name) => {
   const [first, ...rest] = name.split(' ');
   return rest.length ? `${first}<span class="long"> ${rest.join(' ')}</span>` : first;
 };
 
-/** The whole page. `docs` is [{ id, name, who?, sections: [{ title, body?, points?, example? }] }]; ids hold no "-". */
-export function renderLegalPage({ updated, docs, related = [] }) {
+/**
+ * The whole page. `docs` is [{ id, name, who?, dated?, sections: [{ title, body?, points?, example?, links? }] }];
+ * ids hold no "-". The first document is the home page; `dated` shows the "Last updated" line on that document, and
+ * `who.after` is the section number the "Who sees what" card follows. `actions` are the home page's buttons, as [label, url], and
+ * `sample` is the { title, text } of the post shown there.
+ */
+export function renderLegalPage({ updated, docs, actions = [], sample, related = [] }) {
   const names = new Intl.ListFormat('en').format(docs.map((d) => d.name));
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>STFW · ${names}</title>
+<title>STFW · Server Thoughts Freedom Wall</title>
 <meta name="description" content="${names} of STFW, the Server Thoughts Freedom Wall Discord bot.">
 <style>${STYLE}</style>
-<script>${BOOT}</script>
+<script>${boot(docs.map((d) => d.id))}</script>
 </head>
 <body>
-<header class="wrap">
-  <h1>
-    <img class="logo-light" src="${LOGO_LIGHT}" alt="STFW" width="784" height="${LOGO_HEIGHT}">
-    <img class="logo-dark" src="${LOGO_DARK}" alt="" width="784" height="${LOGO_HEIGHT}">
-  </h1>
-  <p class="say"><i>noun</i> /ˌɛs-ti-ɛf-ˈdʌbəl-ju/</p>
-  <p class="sense"><b>S</b>erver <b>T</b>houghts <b>F</b>reedom <b>W</b>all; an anonymous outlet for unfiltered thoughts and confessions.</p>
-  <p class="updated">Last updated ${updated}</p>
-</header>
 <div class="bar"><div class="wrap"><div class="tools card">
-  <div class="tabs" role="tablist" aria-label="Document">
+  <div class="tabs" role="tablist" aria-label="Document" style="--n: ${docs.length}">
     ${docs.map((d) => `<button type="button" role="tab" data-doc="${d.id}" aria-controls="${d.id}" aria-label="${d.name}">${tabName(d.name)}</button>`).join('')}
   </div>
-  <input type="search" id="search" placeholder="Search" aria-label="Search this document">
-  <label class="toggle">Examples <input type="checkbox" role="switch" id="examples" checked></label>
+  <input type="search" id="search" placeholder="Search…" aria-label="Search this document">
+  <label class="toggle">Examples <input type="checkbox" role="switch" id="examples"></label>
   <button type="button" id="theme" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
-    <span class="track"><span class="knob"></span>${SUN}${MOON}</span>
+    ${SUN}${MOON}
   </button>
 </div></div></div>
+<header class="wrap">
+  <div>
+  <h1><a href="/" data-page="${docs[0].id}" aria-label="STFW home">
+    <img class="logo-light" src="${LOGO_LIGHT}" alt="STFW" width="784" height="${LOGO_HEIGHT}">
+    <img class="logo-dark" src="${LOGO_DARK}" alt="" width="784" height="${LOGO_HEIGHT}">
+  </a></h1>
+  <p class="say"><i>noun</i> /ˌɛs-ti-ɛf-ˈdʌbəl-ju/</p>
+  <p class="sense"><b>S</b>erver <b>T</b>houghts <b>F</b>reedom <b>W</b>all; an anonymous outlet for unfiltered thoughts and confessions.</p>
+  <div class="cta">${actions.map(([label, url]) => link(escapeHtml(label) + (url.startsWith('/') ? '' : EXTERNAL), url, 'action')).join('')}</div>
+  <p class="updated">Last updated ${updated}</p>
+  </div>
+  ${sample ? samplePost(sample) : ''}
+</header>
 <main class="wrap">
-  <nav class="toc card" aria-label="Contents">
+  <nav class="toc card" aria-label="Contents"><details><summary>Contents ${CHEVRON}</summary><div class="expander"><div>
     ${docs
       .map((d) => `<ol data-doc="${d.id}">${d.sections.map((s, i) => `<li><a href="#${d.id}-${i + 1}">${escapeHtml(s.title.replace(/\.$/, ''))}</a></li>`).join('')}</ol>`)
       .join('\n')}
-  </nav>
+  </div></div></details></nav>
   <div>
     ${docs
       .map(
-        (d) => `<section class="doc" id="${d.id}">
+        (d, at) => `<section class="doc" id="${d.id}" data-name="${d.name}"${d.dated ? ' data-dated' : ''}>
 <h2>${d.name}</h2>
-${d.who ? whoSeesWhat(d.who) : ''}
-${d.sections.map((s, i) => article(d.id, s, i + 1)).join('\n')}
-<p class="empty" role="status" hidden>No section matches your search</p>
+${at ? '<p class="hint">Select a section number to copy its link.</p>' : ''}
+${d.sections.map((s, i) => article(d.id, s, i + 1) + (d.who && d.who.after === i + 1 ? whoSeesWhat(d.who) : '')).join('\n')}
+${!at && sample ? samplePost(sample) : ''}
+<p class="empty" role="status" hidden>No section here matches your search</p>
+<div class="elsewhere"></div>
 </section>`,
       )
       .join('\n')}
   </div>
 </main>
+<p class="sr" id="said" role="status"></p>
 <footer class="wrap"><div class="card">
   <p>Discord’s own policies</p>
-  <ul>${related.map(([label, url]) => `<li>${external(escapeHtml(label), url)}</li>`).join('')}</ul>
+  <ul>${related.map(([label, url]) => `<li>${external(escapeHtml(label) + ARROW, url)}</li>`).join('')}</ul>
 </div></footer>
 <script>${SCRIPT}</script>
 </body>

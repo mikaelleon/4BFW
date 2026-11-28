@@ -1,6 +1,6 @@
 # Confessions Bot
 
-Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in `node:sqlite`, no native deps).
+Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ and a Postgres database (Supabase), no native deps.
 
 ## Setup
 
@@ -8,8 +8,8 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 2. Bot tab -> enable **Server Members Intent** (needed for `/announce`, welcome DMs, and membership checks).
 3. Invite the bot (replace `YOUR_CLIENT_ID`). The permission set covers viewing, sending, embeds, files, message history, and reply threads:
    `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot%20applications.commands&permissions=309237763072`
-4. `copy .env.example .env`, then fill `DISCORD_TOKEN` and `CLIENT_ID`.
-5. `npm install`, then `npm run deploy` (registers slash commands), then `npm start`.
+4. `copy .env.example .env`, then fill `DISCORD_TOKEN`, `CLIENT_ID` and the database settings ([docs/supabase.md](docs/supabase.md)).
+5. `npm install`, `npm run db:migrate` (creates the tables), `npm run deploy` (registers slash commands), then `npm start`.
    - Leave `DEV_GUILD_ID` empty for global commands (required for DM use, up to ~1h to propagate).
    - Set it to your server ID to test instantly (guild commands do not work in DMs).
 6. In your server: `/setup channel #confessions`. Deny **Send Messages** for @everyone in that channel so only the bot posts.
@@ -17,15 +17,14 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 | `.env` | Required | What it does |
 |---|---|---|
 | `DISCORD_TOKEN`, `CLIENT_ID` | yes | Login and command registration |
+| `DATABASE_URL`, `DATABASE_CA_CERT` | yes | Postgres connection string and the server's certificate file (not needed for a database on this computer) |
 | `DEV_GUILD_ID` | no | Guild-only command deploy for testing |
 | `BOT_PREFIX` | no | DM prefix (default `fw`) |
 | `TIMEZONE` | no | Footer dates (default `Asia/Manila`) |
 | `ID_HASH_SECRET` | no | Pins the hash key for bans and warnings. Set it once; never change it |
-| `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Encrypted DB backups to a private channel, shortly after changes. Both required. If the database outgrows the upload limit, images are left out of the backup (never records); failures are posted in that channel |
+| `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Daily encrypted database backups to a private channel; the newest 10 are kept. Both required. Images are left out as needed to fit the upload limit (never records); failures are posted in that channel. Restore with `npm run db:restore` |
 | `PORT` | no | HTTP keep-alive (default `3000`) |
-| `PUBLIC_URL` | no | Public address of the bot's HTTP server. The guide links to `<PUBLIC_URL>/legal` (Terms of Use and Privacy Policy, text in `src/lib/legal.js`). Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
-
-Moving to Supabase Postgres: [docs/supabase.md](docs/supabase.md) has the schema, scripts and steps. The bot still runs on SQLite.
+| `PUBLIC_URL` | no | Public address of the bot's HTTP server, which serves the web page: `/` (home), `/terms`, `/privacy` and `/faq`, text in `src/lib/legal.js`. The home page's invite button appears when `CLIENT_ID` is set. The guide links to `<PUBLIC_URL>/legal`, which opens the same page. Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
 
 ## Sending a submission
 
@@ -99,7 +98,7 @@ Need **Manage Server** unless noted. They work in a server or in the bot's DMs. 
 - `role` — role that `/announce` DMs the guide to
 - `onlinerole` — role that gets a DM when the bot comes online (at most once every 30 minutes)
 - `modrole` — role that can use mod-log buttons, `/mod`, and **Submission ID** without Manage Server
-- `options` — cooldown, warn limit and expiry, report limit, self-delete window, retention, approval queue, default poll length, join age, account age, daily cap, repost window, welcome DM
+- `options` — cooldown, warn limit and expiry, report limit, self-delete window, retention, image cleanup, approval queue, default poll length, join age, account age, daily cap, repost window, welcome DM
 - `reset_count confirm:true [start_at]` — restart public numbering. Old posts keep their Submission IDs
 - `tagchannel` — route one topic to its own channel
 - `highlights` — post the most-liked submission of the day, the week, or both (rolling 24h / 7 days from when it was turned on; nothing is posted if nobody liked anything)
@@ -155,9 +154,10 @@ Authors can right-click their own post > Apps > **Delete my submission** within 
 
 ## Notes
 
-- The bot stores the author ID on each confession so it can DM the author about replies, warnings, and bans. The guide tells users this. Anyone with access to `data/confessions.db` can see it, so protect that file. Backups of that file are encrypted, but they still contain the same data.
+- The bot stores the author ID on each confession so it can DM the author about replies, warnings, and bans. The guide tells users this. Anyone with access to the database can see it, so protect the database password. Backups are encrypted, but they contain the same data. The tables are closed to Supabase's web API.
 - **Hashed IDs:** warnings, bans, notes, votes, and reports are stored under a keyed hash of `server:user`, not the raw Discord ID. Set `ID_HASH_SECRET` and never change it. A different secret makes every stored ban and warning stop matching its user (the bot logs a warning at startup if the secret changed). Without it, the secret is derived from `DISCORD_TOKEN`.
 - **Data retention:** `/setup options retention_days:N` erases the sender ID, text, and image of posts older than N days (checked hourly). The Discord message stays. Submission IDs, bans, and warnings keep working. Mod-log messages already posted in Discord are not edited.
+- **Image cleanup:** `/setup options image_days:N` deletes stored images of posted, deleted and rejected submissions older than N days (checked hourly) to save database space. Text, sender and every record stay, and the Discord message keeps its picture. A restored or refreshed post that needs a deleted image goes without it.
 - **Anti-abuse** (`/setup options`): `min_join_days`, `min_account_days`, `daily_cap` (posts per person per rolling 24 h), and `dup_hours` (blocks a post that repeats, or nearly repeats, anyone's text from the last N hours; default 24, `0` = off; texts under 12 characters may repeat). The first three are off by default. People are told when they can post again, never why a repost matched.
 - A content warning hides the text behind a spoiler under a visible warning line. A picture goes up as a blurred attachment.
 - Mass DMs can get a bot flagged by Discord. `/announce` and the online notice are slow on purpose; use them sparingly.

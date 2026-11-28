@@ -14,9 +14,9 @@ const reply = (interaction, content) => interaction.reply({ content, flags: EPHE
 /** The Report button was pressed: ask for an optional reason. */
 export async function handleReportButton(interaction) {
   if (!interaction.inGuild()) return reply(interaction, 'Use this button inside a server.');
-  const target = db.getConfessionByMessage(interaction.guildId, interaction.message.id);
+  const target = await db.getConfessionByMessage(interaction.guildId, interaction.message.id);
   if (!target || target.status !== 'posted') return reply(interaction, 'That submission is no longer available to report.');
-  if (db.hasReported(target.id, interaction.user.id)) return reply(interaction, 'You already reported this submission. The moderators have been told.');
+  if (await db.hasReported(target.id, interaction.user.id)) return reply(interaction, 'You already reported this submission. The moderators have been told.');
 
   const modal = new ModalBuilder()
     .setCustomId(`${REPORT_MODAL_PREFIX}:${interaction.message.id}`)
@@ -40,14 +40,14 @@ export async function handleReportModal(interaction) {
   await interaction.deferReply({ flags: EPHEMERAL });
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
   const messageId = interaction.customId.split(':')[2];
-  const target = db.getConfessionByMessage(guild.id, messageId);
+  const target = await db.getConfessionByMessage(guild.id, messageId);
   if (!target || target.status !== 'posted') return interaction.editReply('That submission is no longer available to report.');
 
   const reason = interaction.fields.getTextInputValue('reason').trim() || null;
-  if (!db.addReport(target.id, interaction.user.id, reason)) return interaction.editReply('You already reported this submission.');
+  if (!await db.addReport(target.id, interaction.user.id, reason)) return interaction.editReply('You already reported this submission.');
 
-  const cfg = db.getGuild(guild.id);
-  const count = db.countReports(target.id);
+  const cfg = await db.getGuild(guild.id);
+  const count = await db.countReports(target.id);
   const limit = cfg.report_limit ?? 0;
   const hide = limit > 0 && count >= limit;
   const base = {
@@ -67,7 +67,7 @@ export async function handleReportModal(interaction) {
   await modLog(guild, { ...base, title: `Submission reported (${counter})`, ping }).catch(() => {});
 
   if (hide) {
-    const fresh = db.getConfession(guild.id, target.id);
+    const fresh = await db.getConfession(guild.id, target.id);
     if (fresh.status === 'posted') {
       const hidden = await hideConfessionMessage(guild, fresh).catch((err) => {
         console.error('Auto-hide failed:', err);

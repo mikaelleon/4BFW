@@ -20,10 +20,10 @@ export default {
 
   async execute(interaction) {
     const reply = (content) => interaction.reply({ content, flags: MessageFlags.Ephemeral });
-    if (!isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId))) {
+    if (!isModerator(interaction.member, interaction.memberPermissions, await db.getGuild(interaction.guildId))) {
       return reply('You need the **Manage Server** permission or the moderator role for this.');
     }
-    const row = db.getConfessionByMessage(interaction.guildId, interaction.targetId);
+    const row = await db.getConfessionByMessage(interaction.guildId, interaction.targetId);
     if (!row) return reply('That message is not a submission I posted.');
     return reply(`Submission ID: \`${row.sub_id}\` (${row.number ? `public ${anonRef(row.number)}` : 'no public number yet'}, ${row.status})\nUse it with \`/mod\`.`);
   },

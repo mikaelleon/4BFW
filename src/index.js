@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
-import './restore.js'; // must stay before db.js: restores the DB from the backup channel if the disk was wiped
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -39,6 +38,7 @@ import {
 import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } from './lib/owner-pin.js';
 import { prefix } from './lib/format.js';
 import { handleHttp, legalUrl } from './lib/legal.js';
+import { withKeyLock } from './lib/locks.js';
 import { BUSY_MESSAGE, claimUpload, downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { holdsImages, keep } from './lib/held.js';
 import { closedNotice } from './lib/hours.js';
@@ -93,7 +93,7 @@ setInterval(() => {
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`Logged in as ${c.user.tag}`);
-  for (const cfg of db.configuredGuilds()) {
+  for (const cfg of await db.configuredGuilds()) {
     const guild = c.guilds.cache.get(cfg.guild_id);
     if (guild) await ensureSticky(guild).catch((err) => console.error(`Sticky check failed for ${guild.id}:`, err));
   }
@@ -101,7 +101,7 @@ client.once(Events.ClientReady, async (c) => {
   startBackups(c);
   catchUpDms(c).catch((err) => console.error('DM catch-up failed:', err));
   // Online notices are slow (throttled DMs), so run them after the sticky checks and in the background.
-  for (const cfg of db.configuredGuilds()) {
+  for (const cfg of await db.configuredGuilds()) {
     const guild = c.guilds.cache.get(cfg.guild_id);
     if (guild) notifyOnline(guild).catch((err) => console.error(`Online notice failed for ${guild.id}:`, err));
   }
@@ -147,7 +147,7 @@ async function handleDm(message, catchUp = false) {
   const pref = text.match(/^(notify|preview)\s+(on|off)$/i);
   if (pref) {
     const [which, on] = [pref[1].toLowerCase(), pref[2].toLowerCase() === 'on'];
-    db.setPref(message.author.id, which === 'notify' ? 'notify_off' : 'preview', which === 'notify' ? !on : on);
+    await db.setPref(message.author.id, which === 'notify' ? 'notify_off' : 'preview', which === 'notify' ? !on : on);
     return dm(
       which === 'notify'
         ? on ? 'Reply notifications are **on**.' : 'Reply notifications are **off**: I will not DM you when someone replies to your posts.'
@@ -218,7 +218,7 @@ async function handleDm(message, catchUp = false) {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.guildId) return;
   try {
-    db.setDmCursor(message.author.id, message.id);
+    if (!(await claimDm(message.author.id, message.id))) return; // the catch-up already took it
     await handleDm(message);
   } catch (err) {
     console.error('DM handling failed:', err);
@@ -226,31 +226,39 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+/** Move the user's DM cursor to this message. False when it was already handled, so nothing is posted twice. */
+function claimDm(userId, messageId) {
+  return withKeyLock(`dm:${userId}`, async () => {
+    const current = await db.getDmCursor(userId);
+    if (current && BigInt(messageId) <= BigInt(current)) return false;
+    await db.setDmCursor(userId, messageId);
+    return true;
+  });
+}
+
 /* ---------- DM catch-up: submissions sent while the bot was offline ---------- */
 
 const CATCHUP_MAX_AGE_MS = 24 * 60 * 60_000; // older than this is stale: ignored
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function catchUpDms(c) {
-  for (const userId of db.knownDmUsers()) {
+  for (const userId of await db.knownDmUsers()) {
     try {
       const user = await c.users.fetch(userId);
       const dm = await user.createDM();
-      const cursor = db.getDmCursor(userId);
+      const cursor = await db.getDmCursor(userId);
 
       if (!cursor) {
         // First time we see this user: remember where their DM stands, process nothing old.
         const [latest] = (await dm.messages.fetch({ limit: 1 })).values();
-        if (latest) db.setDmCursor(userId, latest.id);
+        if (latest) await db.setDmCursor(userId, latest.id);
         continue;
       }
 
       const missed = [...(await dm.messages.fetch({ after: cursor, limit: 50 })).values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
       for (const message of missed) {
         // A live message may have moved the cursor while we were busy: never handle one twice.
-        const current = db.getDmCursor(userId);
-        if (current && BigInt(message.id) <= BigInt(current)) continue;
-        db.setDmCursor(userId, message.id);
+        if (!(await claimDm(userId, message.id))) continue;
         if (message.author.bot || message.author.id !== userId) continue;
         if (Date.now() - message.createdTimestamp > CATCHUP_MAX_AGE_MS) continue;
         await handleDm(message, true);
@@ -266,7 +274,7 @@ async function catchUpDms(c) {
 
 client.on(Events.GuildMemberAdd, async (member) => {
   if (member.user.bot) return;
-  const cfg = db.getGuild(member.guild.id);
+  const cfg = await db.getGuild(member.guild.id);
   if (cfg?.welcome_dm && cfg.channel_id) await dmGuide(member.user, member.guild).catch(() => {});
 });
 
@@ -332,7 +340,7 @@ async function routeInteraction(interaction) {
   if (interaction.isButton() && interaction.customId.startsWith(`${RULES_PREFIX}:`)) {
     const guild = client.guilds.cache.get(interaction.customId.split(':')[1]);
     if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
-    return interaction.reply(guidePayload(guild, RULES_PAGE));
+    return interaction.reply(await guidePayload(guild, RULES_PAGE));
   }
 
   // Guide page buttons ("guide:<guildId>:<page>"), in DMs or ephemeral /guide replies.
@@ -340,37 +348,37 @@ async function routeInteraction(interaction) {
     const [, guildId, page] = interaction.customId.split(':');
     const guild = client.guilds.cache.get(guildId);
     if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
-    return interaction.update(guidePayload(guild, Number(page)));
+    return interaction.update(await guidePayload(guild, Number(page)));
   }
 
   // "View Guide" button on the sticky: guide shown only to the clicker.
   if (interaction.isButton() && interaction.customId === GUIDE_BUTTON_ID) {
     if (!interaction.guild) return interaction.reply({ content: 'Use this button inside a server.', flags: EPHEMERAL });
-    return interaction.reply({ ...guidePayload(interaction.guild, 0), flags: EPHEMERAL });
+    return interaction.reply({ ...await guidePayload(interaction.guild, 0), flags: EPHEMERAL });
   }
 
   if (interaction.isButton() && interaction.customId === OPEN_BUTTON_ID) {
-    if (interaction.guildId && db.getBan(interaction.guildId, interaction.user.id)) {
+    if (interaction.guildId && await db.getBan(interaction.guildId, interaction.user.id)) {
       return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
     }
-    const closed = interaction.guildId && closedNotice(db.getGuild(interaction.guildId));
+    const closed = interaction.guildId && closedNotice(await db.getGuild(interaction.guildId));
     if (closed) return interaction.reply({ content: closed, flags: EPHEMERAL });
     return interaction.showModal(confessModal());
   }
 
   // "Reply" button under a submission: open the modal aimed at that post.
   if (interaction.isButton() && interaction.customId === REPLY_BUTTON_ID) {
-    if (db.getBan(interaction.guildId, interaction.user.id)) {
+    if (await db.getBan(interaction.guildId, interaction.user.id)) {
       return interaction.reply({ content: 'You are banned from posting in this server.', flags: EPHEMERAL });
     }
-    const target = db.getConfessionByMessage(interaction.guildId, interaction.message.id);
+    const target = await db.getConfessionByMessage(interaction.guildId, interaction.message.id);
     if (!target || target.status !== 'posted') {
       return interaction.reply({ content: 'That submission is no longer available to reply to.', flags: EPHEMERAL });
     }
-    const closed = closedNotice(db.getGuild(interaction.guildId));
+    const closed = closedNotice(await db.getGuild(interaction.guildId));
     if (closed) return interaction.reply({ content: closed, flags: EPHEMERAL });
     // The OP choice is offered only to the author of the post (inside a thread: of the post the thread is under).
-    const opOf = target.thread_root ? db.getConfession(interaction.guildId, target.thread_root) : target;
+    const opOf = target.thread_root ? await db.getConfession(interaction.guildId, target.thread_root) : target;
     const own = opOf?.author_key === userKey(interaction.guildId, interaction.user.id);
     return interaction.showModal(confessModal({ messageId: interaction.message.id, number: target.number, own }));
   }

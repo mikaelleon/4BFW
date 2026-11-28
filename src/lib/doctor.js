@@ -32,7 +32,7 @@ async function channelCheck(guild, me, id, label, needed, fix) {
 }
 
 export async function runDoctor(guild) {
-  const cfg = db.getGuild(guild.id) ?? {};
+  const cfg = await db.getGuild(guild.id) ?? {};
   const me = guild.members.me ?? (await guild.members.fetchMe());
   const sections = { Channels: [], Roles: [], Settings: [], 'Privacy and data': [] };
 
@@ -71,13 +71,13 @@ export async function runDoctor(guild) {
   ]) {
     if (id) sections.Channels.push(...(await channelCheck(guild, me, id, label, LOG_PERMS, fix)).lines);
   }
-  for (const route of db.listTagChannels(guild.id)) {
+  for (const route of await db.listTagChannels(guild.id)) {
     const name = getTag(route.tag)?.label ?? route.tag;
     sections.Channels.push(...(await channelCheck(guild, me, route.channel_id, `Topic channel (${name})`, POST_PERMS, 'Run `/setup tagchannel` again.')).lines);
   }
 
   if (cfg.auto_thread) {
-    const ids = [cfg.channel_id, ...db.listTagChannels(guild.id).map((r) => r.channel_id)].filter(Boolean);
+    const ids = [cfg.channel_id, ...(await db.listTagChannels(guild.id)).map((r) => r.channel_id)].filter(Boolean);
     for (const id of new Set(ids)) {
       const channel = await guild.channels.fetch(id).catch(() => null);
       const missing = channel ? missingNames(channel, me, THREAD_PERMS) : [];
@@ -99,7 +99,7 @@ export async function runDoctor(guild) {
   if (!sections.Roles.length) sections.Roles.push(line(INFO, 'No roles configured.'));
 
   /* ---- settings that fight each other ---- */
-  const rules = db.listFilterRules(guild.id).length;
+  const rules = (await db.listFilterRules(guild.id)).length;
   if (cfg.approval_mode) {
     sections.Settings.push(
       cfg.log_channel_id
@@ -114,10 +114,10 @@ export async function runDoctor(guild) {
     sections.Settings.push(line(WARN, 'Posts auto-hide after reports but there is no mod log to review them in.'));
   }
   if (cfg.channel_id && postingMode(cfg) !== 'open') sections.Settings.push(line(INFO, postingStatus(cfg).replace(/\n/g, ' ')));
-  const saved = db.countScheduled(guild.id);
+  const saved = await db.countScheduled(guild.id);
   if (saved > 0) sections.Settings.push(line(INFO, `${saved} saved submission${saved === 1 ? ' is' : 's are'} waiting for posting to resume (\`/mod queue\`).`));
   if (cfg.cooldown === 0) sections.Settings.push(line(WARN, 'Cooldown is 0: people can post as fast as they like.'));
-  const pending = db.countPending(guild.id);
+  const pending = await db.countPending(guild.id);
   if (pending > 0) sections.Settings.push(line(WARN, `${pending} submission${pending === 1 ? ' is' : 's are'} waiting for a moderator in the mod log.`));
   const gates = [
     cfg.min_join_days > 0 ? `joined ${cfg.min_join_days}+ days ago` : null,
@@ -129,7 +129,7 @@ export async function runDoctor(guild) {
   sections.Settings.push(line(INFO, `Image upload limit in this server: ${(uploadLimit(guild) / 1_048_576).toFixed(0)} MB.`));
 
   /* ---- privacy / data ---- */
-  if (!db.secretMatches()) {
+  if (!await db.secretMatches()) {
     sections['Privacy and data'].push(line(BAD, 'The ID hash secret changed since the database was written, so existing bans, warnings and notes no longer match their users. Restore the old `ID_HASH_SECRET` (or token).'));
   } else if (usesTokenSecret()) {
     sections['Privacy and data'].push(line(WARN, 'The ID hash secret comes from `DISCORD_TOKEN`. Resetting the token would break every ban and warning. Pin it with `ID_HASH_SECRET` in `.env`.'));
@@ -140,6 +140,9 @@ export async function runDoctor(guild) {
     cfg.retention_days > 0
       ? line(INFO, `Data retention: sender ID, text and images are erased after ${cfg.retention_days} days.`)
       : line(INFO, 'Data retention is off: sender IDs and text are kept until you set `/setup options retention_days`.'),
+    cfg.image_days > 0
+      ? line(INFO, `Image cleanup: stored images of finished posts are deleted after ${cfg.image_days} days.`)
+      : line(INFO, 'Image cleanup is off. Stored images take the most database space: `/setup options image_days`.'),
   );
 
   /* ---- result ---- */

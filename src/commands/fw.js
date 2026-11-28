@@ -49,11 +49,11 @@ export default {
     const notify = interaction.options.getString('notify');
     const preview = interaction.options.getString('preview');
     if (notify) {
-      db.setPref(interaction.user.id, 'notify_off', notify === 'off');
+      await db.setPref(interaction.user.id, 'notify_off', notify === 'off');
       notes.push(notify === 'off' ? 'Reply notifications are **off**: I will not DM you when someone replies to your posts.' : 'Reply notifications are **on**.');
     }
     if (preview) {
-      db.setPref(interaction.user.id, 'preview', preview === 'on');
+      await db.setPref(interaction.user.id, 'preview', preview === 'on');
       notes.push(preview === 'on' ? 'Previews are **on**: I will show you the post and ask before it goes up.' : 'Previews are **off**.');
     }
 

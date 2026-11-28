@@ -22,16 +22,16 @@ function quote(text) {
  * `controls: true` adds the Warn / Delete / Ban buttons (used on new-submission entries).
  */
 export async function modLog(guild, { title, id, subId, number, actor, reason, url, content, authorId, hasImage, controls = false, components = null, fields = [], ping = null }) {
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.log_channel_id) return;
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
   if (!channel) return;
 
   // The stored image (if any) is attached to every entry about this submission, so mods see what was posted.
-  const image = hasImage && id ? db.getConfessionImage(id) : null;
+  const image = hasImage && id ? await db.getConfessionImage(id) : null;
 
   // The sender ID is never shown here: the server owner looks it up with /sender (see owner-pin.js).
-  const row = id ? db.getConfession(guild.id, id) : null;
+  const row = id ? await db.getConfession(guild.id, id) : null;
   // The per-server Submission ID, read from the stored post. `id` is the internal key and must never be shown: /mod would
   // act on a different submission. Entries not about one post (a ban appeal) have none.
   const subNo = row?.sub_id ?? subId;
@@ -69,15 +69,15 @@ export async function modLog(guild, { title, id, subId, number, actor, reason, u
   };
   if (components) payload.components = components; // e.g. the Overturn / Uphold buttons on an appeal
   else if (controls) {
-    const row = db.getConfession(guild.id, id);
-    if (row) payload.components = [controlsRow(row, Boolean(db.getBan(guild.id, row.author_key)))];
+    const row = await db.getConfession(guild.id, id);
+    if (row) payload.components = [controlsRow(row, Boolean(await db.getBan(guild.id, row.author_key)))];
   }
   await channel.send(payload).catch(() => {});
 }
 
 /** A log entry that is not about one submission (e.g. a timed ban ending). */
 export async function systemLog(guild, title, description) {
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.log_channel_id) return;
   const channel = await guild.channels.fetch(cfg.log_channel_id).catch(() => null);
   const embed = new EmbedBuilder().setColor(COLOR).setTitle(title).setDescription(description).setFooter({ text: formatDateTime() });

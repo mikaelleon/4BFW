@@ -82,7 +82,7 @@ export default {
       serverOpt(
         s
           .setName('options')
-          .setDescription('Cooldown, join/account age, daily cap, repost blocker, warnings, reports, approval, polls, retention')
+          .setDescription('Cooldown, age limits, daily cap, reposts, warnings, reports, approval, polls, retention, images')
           .addIntegerOption((o) => o.setName('cooldown').setDescription('Seconds between submissions per user').setMinValue(0).setMaxValue(3600))
           .addIntegerOption((o) => o.setName('warn_limit').setDescription('Warnings before an automatic submission ban').setMinValue(1).setMaxValue(20))
           .addIntegerOption((o) =>
@@ -115,6 +115,9 @@ export default {
           )
           .addIntegerOption((o) =>
             o.setName('daily_cap').setDescription('Most posts one person can make per 24 hours (0 = no cap)').setMinValue(0).setMaxValue(100),
+          )
+          .addIntegerOption((o) =>
+            o.setName('image_days').setDescription('Delete stored images after N days to save space; text and records stay (0 = keep)').setMinValue(0).setMaxValue(3650),
           )
           .addIntegerOption((o) =>
             o.setName('dup_hours').setDescription('Block a post that repeats one from the last N hours (0 = off, default 24)').setMinValue(0).setMaxValue(168),
@@ -214,7 +217,7 @@ export default {
     if (error) return interaction.editReply(error);
 
     const sub = interaction.options.getSubcommand();
-    const cfg = db.getGuild(guild.id);
+    const cfg = await db.getGuild(guild.id);
 
     if (sub === 'channel') {
       const { id, channel } = await pickChannel(interaction, guild);
@@ -228,7 +231,7 @@ export default {
       }
 
       if (cfg?.channel_id && cfg.channel_id !== channel.id) await removeSticky(guild);
-      db.updateGuild(guild.id, { channel_id: channel.id });
+      await db.updateGuild(guild.id, { channel_id: channel.id });
       await refreshSticky(guild);
       // First setup: make the owner's PIN and DM it to them (sender IDs are only viewable with it, see /sender).
       const pin = await ensureOwnerPin(guild);
@@ -247,35 +250,35 @@ export default {
     if (sub === 'modlog') {
       const { id, channel } = await pickChannel(interaction, guild);
       if (!id) {
-        db.updateGuild(guild.id, { log_channel_id: null });
+        await db.updateGuild(guild.id, { log_channel_id: null });
         return interaction.editReply('Moderation log cleared.');
       }
       if (!channel || !textTypes.includes(channel.type)) return interaction.editReply('That is not a text channel in this server.');
-      db.updateGuild(guild.id, { log_channel_id: channel.id });
+      await db.updateGuild(guild.id, { log_channel_id: channel.id });
       return interaction.editReply(`Moderation log set to <#${channel.id}>.`);
     }
 
     if (sub === 'role') {
       const id = interaction.options.getRole('role')?.id ?? interaction.options.getString('role_id')?.trim() ?? null;
       if (!id) {
-        db.updateGuild(guild.id, { role_id: null });
+        await db.updateGuild(guild.id, { role_id: null });
         return interaction.editReply('Guide role cleared.');
       }
       const role = await guild.roles.fetch(id).catch(() => null);
       if (!role) return interaction.editReply('I could not find that role.');
-      db.updateGuild(guild.id, { role_id: role.id });
+      await db.updateGuild(guild.id, { role_id: role.id });
       return interaction.editReply(`Guide role set to **${role.name}**. Use \`/announce\` to DM them the guide.`);
     }
 
     if (sub === 'onlinerole') {
       const id = interaction.options.getRole('role')?.id ?? interaction.options.getString('role_id')?.trim() ?? null;
       if (!id) {
-        db.updateGuild(guild.id, { online_role_id: null });
+        await db.updateGuild(guild.id, { online_role_id: null });
         return interaction.editReply('Online notice role cleared.');
       }
       const role = await guild.roles.fetch(id).catch(() => null);
       if (!role) return interaction.editReply('I could not find that role.');
-      db.updateGuild(guild.id, { online_role_id: role.id });
+      await db.updateGuild(guild.id, { online_role_id: role.id });
       return interaction.editReply(
         `Members with **${role.name}** will get a DM whenever the bot comes online (at most once every 30 minutes).`,
       );
@@ -284,12 +287,12 @@ export default {
     if (sub === 'modrole') {
       const id = interaction.options.getRole('role')?.id ?? interaction.options.getString('role_id')?.trim() ?? null;
       if (!id) {
-        db.updateGuild(guild.id, { mod_role_id: null });
+        await db.updateGuild(guild.id, { mod_role_id: null });
         return interaction.editReply('Moderator role cleared. Only members with **Manage Server** can moderate now.');
       }
       const role = await guild.roles.fetch(id).catch(() => null);
       if (!role) return interaction.editReply('I could not find that role.');
-      db.updateGuild(guild.id, { mod_role_id: role.id });
+      await db.updateGuild(guild.id, { mod_role_id: role.id });
       return interaction.editReply(
         `Members with **${role.name}** can now use the Warn / Delete / Ban buttons in the mod log and the \`/mod\` commands.\n` +
           'If `/mod` does not show up for them, allow it for that role under Server Settings > Integrations > STFW.',
@@ -313,7 +316,7 @@ export default {
       const pollHours = interaction.options.getInteger('poll_hours');
       if (approval !== null) patch.approval_mode = approval ? 1 : 0;
       if (pollHours !== null) patch.poll_hours = pollHours;
-      for (const key of ['min_join_days', 'min_account_days', 'daily_cap', 'dup_hours']) {
+      for (const key of ['min_join_days', 'min_account_days', 'daily_cap', 'dup_hours', 'image_days']) {
         const n = interaction.options.getInteger(key);
         if (n !== null) patch[key] = n;
       }
@@ -321,7 +324,7 @@ export default {
       if (warnLimit !== null) patch.warn_limit = warnLimit;
       if (welcome !== null) patch.welcome_dm = welcome ? 1 : 0;
       if (!Object.keys(patch).length) return interaction.editReply('Nothing to change. Pass at least one option.');
-      db.updateGuild(guild.id, patch);
+      await db.updateGuild(guild.id, patch);
       const warn =
         retention > 0
           ? `\nHeads up: posts older than ${retention} day${retention === 1 ? '' : 's'} lose their stored sender ID, text and image within the hour. ` +
@@ -351,7 +354,7 @@ export default {
       const topic = interaction.options.getString('topic', true);
       const { id, channel } = await pickChannel(interaction, guild);
       if (!id) {
-        db.setTagChannel(guild.id, topic, null);
+        await db.setTagChannel(guild.id, topic, null);
         return interaction.editReply(`${tagText(topic)} posts go to the main channel again.`);
       }
       if (!channel || !textTypes.includes(channel.type)) return interaction.editReply('That is not a text channel in this server.');
@@ -360,7 +363,7 @@ export default {
       if (!channel.permissionsFor(me)?.has(needed)) {
         return interaction.editReply('I need **View Channel**, **Send Messages** and **Embed Links** in that channel.');
       }
-      db.setTagChannel(guild.id, topic, channel.id);
+      await db.setTagChannel(guild.id, topic, channel.id);
       return interaction.editReply(
         `${tagText(topic)} posts now go to <#${channel.id}>. The "Write a Submission" button stays in <#${cfg?.channel_id ?? 'the main channel'}>.`,
       );
@@ -370,7 +373,7 @@ export default {
       const { id, channel } = await pickChannel(interaction, guild);
       const period = interaction.options.getString('period') ?? (cfg?.highlight_period && cfg.highlight_period !== 'off' ? cfg.highlight_period : 'daily');
       if (period === 'off') {
-        db.updateGuild(guild.id, { highlight_period: 'off' });
+        await db.updateGuild(guild.id, { highlight_period: 'off' });
         return interaction.editReply('Confession of the day / week is off.');
       }
       let target = cfg?.highlight_channel_id ?? null;
@@ -385,7 +388,7 @@ export default {
       if (!dest?.permissionsFor(me)?.has(needed)) {
         return interaction.editReply('I need **View Channel**, **Send Messages** and **Embed Links** in that channel.');
       }
-      db.updateGuild(guild.id, { ...highlightTimers(cfg, period), highlight_channel_id: target, highlight_period: period });
+      await db.updateGuild(guild.id, { ...highlightTimers(cfg, period), highlight_channel_id: target, highlight_period: period });
       const when = { daily: 'every 24 hours', weekly: 'every 7 days', both: 'every 24 hours and every 7 days' }[period];
       return interaction.editReply(
         `The most-liked submission (👍) will be posted in <#${target}> ${when}, starting from now. Nothing is posted if nobody liked anything.`,
@@ -394,7 +397,7 @@ export default {
 
     if (sub === 'featured') {
       if (interaction.options.getBoolean('off')) {
-        db.updateGuild(guild.id, { featured_channel_id: null });
+        await db.updateGuild(guild.id, { featured_channel_id: null });
         return interaction.editReply('Featured channel is off. Posts that were already featured stay where they are.');
       }
       const { id, channel } = await pickChannel(interaction, guild);
@@ -411,7 +414,7 @@ export default {
       }
       if (threshold !== null) patch.featured_threshold = threshold;
       if (!Object.keys(patch).length) return interaction.editReply('Give a `channel` and/or a `threshold`.');
-      const saved = db.updateGuild(guild.id, patch);
+      const saved = await db.updateGuild(guild.id, patch);
       if (!saved.featured_channel_id) return interaction.editReply(`Threshold saved (${saved.featured_threshold}). Pick a \`channel\` to turn the featured channel on.`);
       return interaction.editReply(
         `Posts with **${saved.featured_threshold}** or more 👍 are now copied to <#${saved.featured_channel_id}>. Posts that already have that many are featured on their next reaction.`,
@@ -420,7 +423,7 @@ export default {
 
     if (sub === 'refreshposts') {
       if (refreshing.has(guild.id)) return interaction.editReply('A refresh is already running for this server.');
-      const rows = db.listRecentPosted(guild.id, interaction.options.getInteger('count') ?? 50);
+      const rows = await db.listRecentPosted(guild.id, interaction.options.getInteger('count') ?? 50);
       if (!rows.length) return interaction.editReply('There are no posts to refresh.');
       refreshing.add(guild.id);
       await interaction.editReply(`Refreshing ${rows.length} post${rows.length === 1 ? '' : 's'}. This takes about ${Math.ceil(rows.length * 0.7)} seconds...`);
@@ -433,11 +436,11 @@ export default {
           if (!channel) failed++;
           else {
             try {
-              await channel.messages.edit(row.message_id, { components: postComponents(row) });
+              await channel.messages.edit(row.message_id, { components: await postComponents(row) });
               done++;
             } catch (err) {
               if (err.code === 10008) {
-                db.markConfession(guild.id, row.id, 'deleted'); // the message was removed by hand
+                await db.markConfession(guild.id, row.id, 'deleted'); // the message was removed by hand
                 gone++;
               } else failed++;
             }
@@ -460,12 +463,12 @@ export default {
 
     if (sub === 'threads') {
       if (!interaction.options.getBoolean('enabled', true)) {
-        db.updateGuild(guild.id, { auto_thread: 0 });
+        await db.updateGuild(guild.id, { auto_thread: 0 });
         return interaction.editReply('Reply threads are off: new replies go in the channel. Existing threads stay, and replies inside them still work.');
       }
       if (!cfg?.channel_id) return interaction.editReply('Run `/setup channel` first.');
       const me = guild.members.me ?? (await guild.members.fetchMe());
-      const ids = [cfg.channel_id, ...db.listTagChannels(guild.id).map((r) => r.channel_id)];
+      const ids = [cfg.channel_id, ...(await db.listTagChannels(guild.id)).map((r) => r.channel_id)];
       const lacking = [];
       for (const id of new Set(ids)) {
         const channel = await guild.channels.fetch(id).catch(() => null);
@@ -474,7 +477,7 @@ export default {
       if (lacking.length) {
         return interaction.editReply(`I need **Create Public Threads** and **Send Messages in Threads** in ${lacking.join(', ')}. Nothing was changed.`);
       }
-      db.updateGuild(guild.id, { auto_thread: 1 });
+      await db.updateGuild(guild.id, { auto_thread: 1 });
       return interaction.editReply(
         'Reply threads are **on**. Each new post gets a thread, and **Reply** posts into it under an alias that stays the same in that thread. Older posts get a thread at their first reply.',
       );
@@ -484,7 +487,7 @@ export default {
       // Whatever changes, saved submissions may now be free to go up (this does nothing while posting is not open).
       const release = () => releaseScheduled(guild).catch((err) => console.error(`Posting saved submissions failed for ${guild.id}:`, err));
       if (interaction.options.getBoolean('off')) {
-        db.updateGuild(guild.id, { quiet_start: null, quiet_end: null });
+        await db.updateGuild(guild.id, { quiet_start: null, quiet_end: null });
         release();
         return interaction.editReply('Quiet hours are off.');
       }
@@ -498,7 +501,7 @@ export default {
       if (start === null || end === null) return interaction.editReply('Give both `start` and `end` as 24-hour times like `23:00` and `05:00`, or pass `off: true`.');
       if (start === end) return interaction.editReply('`start` and `end` must differ. To stop posting for now, use `/mod pause`.');
       const hold = mode ? mode === 'hold' : Boolean(cfg?.quiet_hold);
-      db.updateGuild(guild.id, { quiet_start: start, quiet_end: end, quiet_hold: hold ? 1 : 0 });
+      await db.updateGuild(guild.id, { quiet_start: start, quiet_end: end, quiet_hold: hold ? 1 : 0 });
       release();
       const effect = hold
         ? 'Nothing is posted; new submissions are saved after their author agrees to wait, and go up afterwards.'
@@ -513,6 +516,6 @@ export default {
     }
 
     // view
-    return interaction.editReply({ embeds: [settingsEmbed(guild)], allowedMentions: { parse: [] } });
+    return interaction.editReply({ embeds: [await settingsEmbed(guild)], allowedMentions: { parse: [] } });
   },
 };

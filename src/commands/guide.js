@@ -17,6 +17,6 @@ export default {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const { guild, error } = await resolveGuild(interaction);
     if (error) return interaction.editReply(error);
-    return interaction.editReply(guidePayload(guild, 0));
+    return interaction.editReply(await guidePayload(guild, 0));
   },
 };

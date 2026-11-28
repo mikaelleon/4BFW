@@ -1,10 +1,15 @@
-// Shared by the backup job and the startup restore. Backups hold author IDs, so they are always encrypted.
-// File layout: iv (12 bytes) | auth tag (16 bytes) | AES-256-GCM(gzip(sqlite file)).
+// Shared by the backup job and the restore tools. Backups hold author IDs, so they are always encrypted.
+// File layout: iv (12 bytes) | auth tag (16 bytes) | AES-256-GCM(gzip(contents)). Contents: a JSON snapshot of the
+// Postgres database, or, in backups from before the move to Postgres, the SQLite file.
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
+// Old SQLite backups (only read by `npm run db:pull`).
 export const BACKUP_PREFIX = 'confessions-backup-';
 export const BACKUP_SUFFIX = '.db.gz.enc';
+// Postgres backups.
+export const PG_BACKUP_PREFIX = 'confessions-pg-';
+export const PG_BACKUP_SUFFIX = '.json.gz.enc';
 
 const key = () => scryptSync(process.env.BACKUP_PASSPHRASE, 'confessions-bot-backup', 32);
 

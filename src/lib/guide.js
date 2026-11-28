@@ -141,9 +141,9 @@ function navRows(guildId, page) {
 }
 
 /** One page of the guide (overview, how to use, rules) plus its arrows. */
-export function guidePayload(guild, page = 0) {
+export async function guidePayload(guild, page = 0) {
   const index = Number.isInteger(page) && page >= 0 && page < BUILDERS.length ? page : 0;
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   // No author line or server icon: the guide does not show which server it came from.
   const embed = new EmbedBuilder()
     .setColor(COLOR)
@@ -153,7 +153,7 @@ export function guidePayload(guild, page = 0) {
 }
 
 export async function dmGuide(user, guild) {
-  await user.send(guidePayload(guild, 0));
+  await user.send(await guidePayload(guild, 0));
 }
 
 const ONLINE_COOLDOWN_MS = 30 * 60_000;
@@ -163,10 +163,10 @@ const ONLINE_COOLDOWN_MS = 30 * 60_000;
  * Skipped if one went out in the last 30 minutes, so repeated restarts do not spam people.
  */
 export async function notifyOnline(guild) {
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.online_role_id || !cfg.channel_id) return;
   if (cfg.online_notified_at && Date.now() - cfg.online_notified_at < ONLINE_COOLDOWN_MS) return;
-  db.updateGuild(guild.id, { online_notified_at: Date.now() });
+  await db.updateGuild(guild.id, { online_notified_at: Date.now() });
 
   const embed = new EmbedBuilder()
     .setColor(COLOR)

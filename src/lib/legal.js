@@ -1,5 +1,7 @@
-// The Terms of Use, Privacy Policy and FAQ, served as one web page by the bot's own HTTP server (design: legal-page.js).
+// The Home page, Terms of Use, Privacy Policy and FAQ, served by the bot's own HTTP server (design: legal-page.js).
+// They are one document with a tab each: "/", "/terms", "/privacy" and "/faq" all send it, and the browser shows the tab.
 // The privacy text describes what the code actually stores: update it when that changes.
+import { prefix } from './format.js';
 import { renderLegalPage } from './legal-page.js';
 
 const UPDATED = 'November 28, 2026';
@@ -15,11 +17,14 @@ export function legalUrl() {
   return /^https?:\/\//i.test(base) ? `${base}${LEGAL_PATH}` : null;
 }
 
-/** HTTP handler: the page at LEGAL_PATH, a plain "ok" everywhere else (keep-alive pings). */
+// LEGAL_PATH stays for the links already posted in Discord ("/legal#faq-6"): the browser moves them to the new address.
+const PAGES = new Set(['', LEGAL_PATH, '/terms', '/privacy', '/faq']);
+
+/** HTTP handler: the web page at the addresses in PAGES, a plain "ok" everywhere else (keep-alive pings). */
 export function handleHttp(req, res) {
-  if (req.url.split('?')[0].replace(/\/$/, '') !== LEGAL_PATH) return res.end('ok');
+  if (!PAGES.has(req.url.split('?')[0].replace(/\/$/, ''))) return res.end('ok');
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  return res.end(LEGAL_HTML);
+  return res.end(PAGE_HTML);
 }
 
 const DISCORD = {
@@ -126,6 +131,7 @@ const PRIVACY = [
     points: [
       'Each server sets its own retention period. When one is set, the sender ID, text, and images of older submissions are erased from the database.',
       'If no period is set, they are kept until removed.',
+      'A server may also delete stored images of older submissions to save space, while keeping the rest of the record.',
       'Moderation records can be kept after that erasure. Leaving a server does not delete your data.',
       'Messages already posted in Discord, and older backups, are not changed by the erasure.',
     ],
@@ -142,7 +148,7 @@ const PRIVACY = [
     title: 'Third parties',
     points: [
       'The bot runs on Discord, which has its own Terms of Service and Privacy Policy.',
-      'It also relies on a hosting provider to run and store its data.',
+      'It also relies on a hosting provider to run the bot and a database provider to store its data.',
     ],
     links: [['Terms of Service', DISCORD.terms], ['Privacy Policy', DISCORD.privacy]],
   },
@@ -180,7 +186,7 @@ const FAQ = [
     points: [
       'To report a post, press Report under it.',
       'To contest a warning, use /appeal with the warning ID.',
-      'To appeal a ban, send the bot a direct message with its prefix, the word appeal, and your reason (for example: fw appeal, then why).',
+      `To appeal a ban, send the bot a direct message with its prefix, the word appeal, and your reason (for example: ${prefix()} appeal, then why).`,
       'For anything else, including removing a post or your stored data, message the server’s moderators or owner.',
     ],
   },
@@ -189,9 +195,10 @@ const FAQ = [
 /** The part of the address that opens "Inquiries and concerns" ("faq-6"). */
 export const CONCERNS_ANCHOR = `faq-${FAQ.findIndex((s) => s.title === CONCERNS) + 1}`;
 
-// "Who sees what" at the top of the Privacy Policy. It only restates the policy above: keep the two in step.
+// "Who sees what", a card inside the Privacy Policy. It only restates the policy above: keep the two in step.
 const WHO = {
   heading: 'Who sees what',
+  after: 3, // "Who can see it"
   post: { title: 'Anonymous #012', text: 'Whoever keeps leaving kind notes on the library tables, thank you. Finals week needed it.' },
   viewers: [
     { name: 'Member', answer: 'Sees the post without your name or picture. What you write or upload can still give you away.' },
@@ -199,16 +206,48 @@ const WHO = {
   ],
 };
 
-const LEGAL_HTML = renderLegalPage({
+// The invite link, with the permissions listed in the README. Without a CLIENT_ID the page leaves the button out.
+const CLIENT_ID = (process.env.CLIENT_ID || '').trim();
+const INVITE_URL = /^\d+$/.test(CLIENT_ID)
+  ? `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&scope=bot%20applications.commands&permissions=309237763072`
+  : null;
+
+// Home only restates the guide and the FAQ: keep them in step. `links` starting with "/" open a tab of this page.
+// In Home text, `backticks` mark a command and **stars** the name of a button.
+const HOME = [
+  {
+    title: 'Post with a slash command',
+    body: 'Type `/fw` in any channel of the server, or in the bot’s DMs, and only you will see the reply.',
+  },
+  {
+    title: 'Post with the button',
+    body: 'Press **Write a Submission** at the bottom of the submissions channel, then type your post in the pop-up.',
+  },
+  {
+    title: 'Post by direct message',
+    body: `DM the bot with \`${prefix()}\` followed by your message, and attach an image if you want it included.`,
+  },
+  {
+    title: 'Read this before you post',
+    body: 'The FAQ explains how anonymity works, and posting means you accept the Terms of Use and the Privacy Policy.',
+    links: [['Terms of Use', '/terms'], ['Privacy Policy', '/privacy']],
+  },
+];
+
+const PAGE_HTML = renderLegalPage({
   updated: UPDATED,
   related: [
     ['Terms of Service', DISCORD.terms],
     ['Privacy Policy', DISCORD.privacy],
     ['Community Guidelines', DISCORD.guidelines],
   ],
+  // The home page's buttons: the first is the filled one.
+  actions: [...(INVITE_URL ? [['Invite to Discord Server', INVITE_URL]] : []), ['Read the FAQ', '/faq']],
+  sample: WHO.post,
   docs: [
-    { id: 'terms', name: 'Terms of Use', sections: TERMS },
-    { id: 'privacy', name: 'Privacy Policy', sections: PRIVACY, who: WHO },
+    { id: 'home', name: 'Home', sections: HOME },
+    { id: 'terms', name: 'Terms of Use', sections: TERMS, dated: true },
+    { id: 'privacy', name: 'Privacy Policy', sections: PRIVACY, who: WHO, dated: true },
     { id: 'faq', name: 'FAQ', sections: FAQ },
   ],
 });

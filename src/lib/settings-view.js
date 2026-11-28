@@ -43,8 +43,8 @@ function filterSummary(c, ruleCount) {
   return `${parts.join(', ')} (${c.filter_action === 'hold' ? 'hold for review' : 'reject'})`;
 }
 
-export function settingsEmbed(guild, now = Date.now()) {
-  const c = db.getGuild(guild.id) ?? {};
+export async function settingsEmbed(guild, now = Date.now()) {
+  const c = await db.getGuild(guild.id) ?? {};
   const highlight =
     c.highlight_channel_id && HIGHLIGHTS[c.highlight_period]
       ? `${HIGHLIGHTS[c.highlight_period]} in <#${c.highlight_channel_id}>`
@@ -74,7 +74,7 @@ export function settingsEmbed(guild, now = Date.now()) {
         ['Guide', role(c.role_id)],
         ['Online notice', role(c.online_role_id)],
       ]),
-      { name: 'Topic channels', value: topicLines(db.listTagChannels(guild.id)) },
+      { name: 'Topic channels', value: topicLines(await db.listTagChannels(guild.id)) },
       column('Posting', [
         ['Cooldown', plural(c.cooldown ?? 30, 'second')],
         ['Daily cap', c.daily_cap > 0 ? `${c.daily_cap} per 24 hours` : 'Off'],
@@ -87,16 +87,17 @@ export function settingsEmbed(guild, now = Date.now()) {
       ]),
       column('Moderation', [
         ['Approval queue', onOff(c.approval_mode)],
-        ['Auto-filter', filterSummary(c, db.listFilterRules(guild.id).length)],
+        ['Auto-filter', filterSummary(c, (await db.listFilterRules(guild.id)).length)],
         ['Auto-hide', c.report_limit > 0 ? plural(c.report_limit, 'report') : 'Off'],
         ['Warn limit', plural(c.warn_limit ?? 3, 'warning')],
         ['Warning expiry', c.warn_expiry_days > 0 ? plural(c.warn_expiry_days, 'day') : 'Never'],
         ['Self-delete', c.self_delete_minutes > 0 ? plural(c.self_delete_minutes, 'minute') : 'Off'],
         ['Data retention', c.retention_days > 0 ? plural(c.retention_days, 'day') : 'Keep forever'],
+        ['Image cleanup', c.image_days > 0 ? `After ${plural(c.image_days, 'day')}` : 'Off'],
       ]),
       section('Other', [
         ['Welcome DM', onOff(c.welcome_dm)],
-        ['Owner PIN', hasPin(guild.id) ? 'Set' : 'Not set (owner: run /ownerpin)'],
+        ['Owner PIN', await hasPin(guild.id) ? 'Set' : 'Not set (owner: run /ownerpin)'],
       ]),
     );
 }

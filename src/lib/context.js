@@ -30,9 +30,9 @@ export async function candidateGuilds(client, userId, { admin = false, manageOnl
       // manageOnly: configuration commands, which the moderator role cannot use
       const allowed = manageOnly
         ? member.permissions.has(PermissionFlagsBits.ManageGuild)
-        : isModerator(member, member.permissions, getGuild(guild.id));
+        : isModerator(member, member.permissions, await getGuild(guild.id));
       if (!allowed) continue;
-    } else if (!getGuild(guild.id)?.channel_id) {
+    } else if (!(await getGuild(guild.id))?.channel_id) {
       continue;
     }
     out.push(guild);
@@ -50,10 +50,10 @@ export async function resolveGuild(interaction, { admin = false, manageOnly = fa
     if (admin && manageOnly && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
       return { error: 'You need the **Manage Server** permission for this.' };
     }
-    if (admin && !manageOnly && !isModerator(interaction.member, interaction.memberPermissions, getGuild(guild.id))) {
+    if (admin && !manageOnly && !isModerator(interaction.member, interaction.memberPermissions, await getGuild(guild.id))) {
       return { error: 'You need the **Manage Server** permission or the moderator role for this.' };
     }
-    if (!admin && !getGuild(guild.id)?.channel_id) {
+    if (!admin && !(await getGuild(guild.id))?.channel_id) {
       return { error: 'Submissions are not set up in this server yet. Ask an admin to run `/setup channel`.' };
     }
     return { guild };

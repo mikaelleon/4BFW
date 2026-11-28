@@ -8,13 +8,13 @@ import { PRESET_ID, combineReason, reasonDropdown } from './reasons.js';
 export const APPROVAL_REASON_PREFIX = 'approvalreason'; // modal "approvalreason:<confession id>"
 const EPHEMERAL = MessageFlags.Ephemeral;
 
-function guard(interaction, idText) {
+async function guard(interaction, idText) {
   const deny = (content) => interaction.reply({ content, flags: EPHEMERAL }).catch(() => {});
-  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId))) {
+  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, await db.getGuild(interaction.guildId))) {
     deny('Only moderators can review submissions.');
     return null;
   }
-  const row = db.getConfession(interaction.guildId, Number(idText));
+  const row = await db.getConfession(interaction.guildId, Number(idText));
   if (!row) {
     deny('That submission no longer exists.');
     return null;
@@ -35,7 +35,7 @@ function resolvedEntry(interaction, outcome) {
 /** Approve acts at once; Reject asks for a reason first. */
 export async function handleApprovalButton(interaction) {
   const [, action, idText] = interaction.customId.split(':');
-  const row = guard(interaction, idText);
+  const row = await guard(interaction, idText);
   if (!row) return;
 
   if (action === 'no') {
@@ -60,7 +60,7 @@ export async function handleApprovalButton(interaction) {
 }
 
 export async function handleApprovalModal(interaction) {
-  const row = guard(interaction, interaction.customId.split(':')[1]);
+  const row = await guard(interaction, interaction.customId.split(':')[1]);
   if (!row) return;
   await interaction.deferUpdate();
   const reason = combineReason(interaction.fields.getStringSelectValues(PRESET_ID)[0], interaction.fields.getTextInputValue('reason'));

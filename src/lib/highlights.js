@@ -27,7 +27,7 @@ async function postHighlight(guild, cfg, period, row) {
   const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
   if (!channel || !channel.permissionsFor(me)?.has(needed)) return;
 
-  const image = row.has_image ? db.getConfessionImage(row.id) : null;
+  const image = row.has_image ? await db.getConfessionImage(row.id) : null;
   const files = postFiles(image, row.cw);
   const tag = getTag(row.tag);
   const url = `https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id}`;
@@ -48,7 +48,7 @@ async function postHighlight(guild, cfg, period, row) {
 /** Called every minute: post whichever highlights are due. Windows are rolling (the last 24 h / 7 days since the previous one). */
 export async function runHighlights(client) {
   const now = Date.now();
-  for (const cfg of db.guildsWithHighlights()) {
+  for (const cfg of await db.guildsWithHighlights()) {
     const guild = client.guilds.cache.get(cfg.guild_id);
     if (!guild) continue;
     for (const p of PERIODS) {
@@ -56,8 +56,8 @@ export async function runHighlights(client) {
       const last = cfg[p.field];
       if (!last || now - last < p.ms) continue;
       // Mark first: a failed send must not retry every minute.
-      db.updateGuild(guild.id, { [p.field]: now });
-      const top = db.topLikedSince(guild.id, now - p.ms);
+      await db.updateGuild(guild.id, { [p.field]: now });
+      const top = await db.topLikedSince(guild.id, now - p.ms);
       if (!top) continue; // nothing was liked this period
       await postHighlight(guild, cfg, p, top).catch((err) => console.error(`Highlight failed for ${guild.id}:`, err));
     }

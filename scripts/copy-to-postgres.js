@@ -5,14 +5,10 @@
 // The SQLite file is opened read-only.
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { TABLES, WITH_IDENTITY } from '../src/lib/tables.js';
 import { connect } from './pg-client.js';
 
-const SCHEMA_VERSION = 16; // the SQLite schema the Postgres migrations match
-const TABLES = [
-  'guilds', 'confessions', 'confession_images', 'warnings', 'bans', 'reports', 'mod_notes', 'tag_channels', 'reactions',
-  'poll_options', 'poll_votes', 'appeals', 'ban_appeals', 'filter_rules', 'user_prefs', 'thread_aliases', 'meta', 'dm_cursor',
-];
-const WITH_IDENTITY = ['confessions', 'warnings', 'mod_notes', 'ban_appeals', 'filter_rules'];
+const SCHEMA_VERSION = 16; // the last SQLite schema the bot had
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -70,6 +66,8 @@ const client = await connect().catch((err) => stop(err.message));
 try {
   source.exec('BEGIN'); // one consistent view, even if the bot is writing
   await client.query('BEGIN');
+  // A bot started against the new database writes this one row itself; the copy brings its own.
+  await client.query("DELETE FROM public.meta WHERE key = 'idkey_fp'");
 
   for (const table of TABLES) {
     const { rows } = await client.query(`SELECT 1 FROM public.${table} LIMIT 1`);

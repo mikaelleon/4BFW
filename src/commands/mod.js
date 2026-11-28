@@ -148,7 +148,7 @@ export default {
     const sub = interaction.options.getSubcommand();
     if (VIEWS.has(sub)) return serverWide(interaction, guild, sub);
     const id = interaction.options.getInteger('id', true);
-    const row = db.getConfessionBySubId(guild.id, id);
+    const row = await db.getConfessionBySubId(guild.id, id);
     if (!row) return interaction.editReply(`There is no submission with ID \`${id}\` in this server.`);
 
     const actor = interaction.user;
@@ -156,7 +156,7 @@ export default {
     const client = interaction.client;
 
     if (sub === 'info') {
-      const cfg = db.getGuild(guild.id);
+      const cfg = await db.getGuild(guild.id);
       const embed = new EmbedBuilder()
         .setColor(COLOR)
         .setTitle(`Submission ID ${id}`)
@@ -164,9 +164,9 @@ export default {
           { name: 'Public number', value: row.number ? anonRef(row.number) : 'Not posted yet', inline: true },
           { name: 'Status', value: row.status, inline: true },
           { name: 'Posted', value: time(Math.floor(row.created_at / 1000), 'R'), inline: true },
-          { name: "Author's warnings", value: `${db.countWarnings(guild.id, row.author_key)}/${cfg.warn_limit}`, inline: true },
-          { name: 'Author banned', value: banText(db.getBan(guild.id, row.author_key)), inline: true },
-          { name: 'Reports', value: `${db.countReports(row.id)}${cfg.report_limit > 0 ? `/${cfg.report_limit}` : ''}`, inline: true },
+          { name: "Author's warnings", value: `${await db.countWarnings(guild.id, row.author_key)}/${cfg.warn_limit}`, inline: true },
+          { name: 'Author banned', value: banText(await db.getBan(guild.id, row.author_key)), inline: true },
+          { name: 'Reports', value: `${await db.countReports(row.id)}${cfg.report_limit > 0 ? `/${cfg.report_limit}` : ''}`, inline: true },
         );
       if (row.channel_id && row.message_id) {
         embed.setDescription(`[Jump to message](https://discord.com/channels/${guild.id}/${row.channel_id}/${row.message_id})`);
@@ -174,7 +174,7 @@ export default {
       return interaction.editReply({ embeds: [embed] });
     }
 
-    if (sub === 'history') return interaction.editReply({ embeds: [historyEmbed(guild, row)], allowedMentions: { parse: [] } });
+    if (sub === 'history') return interaction.editReply({ embeds: [await historyEmbed(guild, row)], allowedMentions: { parse: [] } });
     if (sub === 'restore') return interaction.editReply(await restoreSubmission(guild, row, actor));
     if (sub === 'note') return interaction.editReply(await noteAuthor(guild, row, actor, interaction.options.getString('text', true).trim()));
 
@@ -199,8 +199,8 @@ async function serverWide(interaction, guild, sub) {
   const { options, user } = interaction;
   const show = (embed) => interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 
-  if (sub === 'queue') return show(queueEmbed(guild, options.getInteger('page') ?? 1));
-  if (sub === 'stats') return show(statsEmbed(guild, options.getInteger('days') ?? 30));
+  if (sub === 'queue') return show(await queueEmbed(guild, options.getInteger('page') ?? 1));
+  if (sub === 'stats') return show(await statsEmbed(guild, options.getInteger('days') ?? 30));
   if (sub === 'search') {
     const days = options.getInteger('days');
     const filters = {
@@ -209,10 +209,10 @@ async function serverWide(interaction, guild, sub) {
       status: options.getString('status'),
       since: days ? Date.now() - days * 86_400_000 : null,
     };
-    return show(searchEmbed(guild, filters, options.getInteger('page') ?? 1));
+    return show(await searchEmbed(guild, filters, options.getInteger('page') ?? 1));
   }
 
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.channel_id) return interaction.editReply('Submissions are not set up in this server yet.');
 
   if (sub === 'pause') {
@@ -221,7 +221,7 @@ async function serverWide(interaction, guild, sub) {
     const until = parsed.ms ? Date.now() + parsed.ms : 0;
     const reason = options.getString('reason')?.trim() || null;
     const hold = options.getString('mode') === 'hold';
-    const fresh = db.updateGuild(guild.id, { paused_until: until, pause_reason: reason, pause_hold: hold ? 1 : 0 });
+    const fresh = await db.updateGuild(guild.id, { paused_until: until, pause_reason: reason, pause_hold: hold ? 1 : 0 });
     const length = until ? `until ${untilTag(until)}` : 'until `/mod resume`';
     await modLog(guild, {
       title: hold ? 'Posting paused (submissions are saved)' : 'Submissions paused',
@@ -230,7 +230,7 @@ async function serverWide(interaction, guild, sub) {
       fields: [{ name: 'Length', value: length, inline: true }],
     });
     if (!hold) {
-      const saved = db.countScheduled(guild.id);
+      const saved = await db.countScheduled(guild.id);
       const kept = saved ? ` ${saved} saved submission${saved === 1 ? '' : 's'} will post after the pause.` : '';
       return interaction.editReply(`Submissions and replies are paused ${length}.${kept} Posts awaiting approval can still be approved.`);
     }
@@ -245,9 +245,9 @@ async function serverWide(interaction, guild, sub) {
   const after = { ...cfg, paused_until: null };
   const quiet = postingMode(after) === 'open' ? null : `Quiet hours still apply: ${postingStatus(after)}`;
   if (!isPaused(cfg)) return interaction.editReply(quiet ? `There is no pause to lift. ${quiet}` : 'Submissions are not paused.');
-  db.updateGuild(guild.id, { paused_until: null, pause_reason: null, pause_hold: 0 });
+  await db.updateGuild(guild.id, { paused_until: null, pause_reason: null, pause_hold: 0 });
   await modLog(guild, { title: 'Pause lifted', actor: user });
-  const saved = db.countScheduled(guild.id);
+  const saved = await db.countScheduled(guild.id);
   const queued = saved ? ` ${saved} saved submission${saved === 1 ? '' : 's'} ${quiet ? 'will post after that' : 'are being posted now'}.` : '';
   releaseSoon(guild);
   return interaction.editReply(quiet ? `The pause is lifted. ${quiet}${queued}` : `Submissions are open again.${queued}`);

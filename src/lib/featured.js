@@ -1,12 +1,12 @@
 // Featured channel: once a post collects enough 👍 it is copied to a channel the admin picks (/setup featured).
 // The copy's counters follow later reactions; it is removed again if the original is deleted or hidden.
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { withKeyLock } from './locks.js';
 import * as db from '../db.js';
 import { anonTitle } from './format.js';
 import { postFiles, renderBody } from './render.js';
 import { getTag, tagText } from './tags.js';
 
-const busy = new Set(); // posts being featured right now, so two quick clicks cannot post it twice
 const jump = (guildId, row) => `https://discord.com/channels/${guildId}/${row.channel_id}/${row.message_id}`;
 
 function featuredEmbed(guildId, row, counts, imageName) {
@@ -22,14 +22,19 @@ function featuredEmbed(guildId, row, counts, imageName) {
 }
 
 /** Call after a reaction changed: features the post when it reaches the threshold, or refreshes its counters. */
-export async function maybeFeature(guild, row) {
-  const cfg = db.getGuild(guild.id);
+export function maybeFeature(guild, row) {
+  // One at a time per post, so two quick reactions cannot feature it twice.
+  return withKeyLock(`feature:${row.id}`, () => featureNow(guild, row));
+}
+
+async function featureNow(guild, row) {
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.featured_channel_id) return;
-  const fresh = db.getConfession(guild.id, row.id);
+  const fresh = await db.getConfession(guild.id, row.id);
   if (!fresh || fresh.status !== 'posted' || fresh.purged_at || fresh.thread_root) return; // thread replies stay in their thread
 
-  const counts = db.reactionCounts(fresh.id);
-  const image = fresh.has_image ? db.getConfessionImage(fresh.id) : null;
+  const counts = await db.reactionCounts(fresh.id);
+  const image = fresh.has_image ? await db.getConfessionImage(fresh.id) : null;
   const { files, imageName } = postFiles(image, fresh.cw);
 
   if (fresh.featured_message_id) {
@@ -41,20 +46,17 @@ export async function maybeFeature(guild, row) {
     await copy?.edit({ embeds: [featuredEmbed(guild.id, fresh, counts, kept ?? imageName)] }).catch(() => {});
     return;
   }
-  if (counts.up < (cfg.featured_threshold || 5) || busy.has(fresh.id)) return;
+  if (counts.up < (cfg.featured_threshold || 5)) return;
 
-  busy.add(fresh.id);
   try {
     const channel = await guild.channels.fetch(cfg.featured_channel_id).catch(() => null);
     const me = guild.members.me ?? (await guild.members.fetchMe());
     const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
     if (!channel || !channel.permissionsFor(me)?.has(needed)) return;
     const msg = await channel.send({ embeds: [featuredEmbed(guild.id, fresh, counts, imageName)], files, allowedMentions: { parse: [] } });
-    db.setFeatured(fresh.id, channel.id, msg.id);
+    await db.setFeatured(fresh.id, channel.id, msg.id);
   } catch (err) {
     console.error('Featuring failed:', err);
-  } finally {
-    busy.delete(fresh.id);
   }
 }
 
@@ -63,5 +65,5 @@ export async function removeFeatured(guild, row) {
   if (!row.featured_message_id) return;
   const channel = await guild.channels.fetch(row.featured_channel_id).catch(() => null);
   await channel?.messages.delete(row.featured_message_id).catch(() => {});
-  db.setFeatured(row.id, null, null);
+  await db.setFeatured(row.id, null, null);
 }

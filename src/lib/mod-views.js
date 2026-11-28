@@ -44,16 +44,16 @@ function listEmbed(guild, title, { rows, total }, page, empty, note) {
 }
 
 /** Everything not up that could be: awaiting approval, hidden after reports, or saved until posting resumes. */
-export function queueEmbed(guild, page = 1) {
-  const found = db.listQueue(guild.id, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+export async function queueEmbed(guild, page = 1) {
+  const found = await db.listQueue(guild.id, PAGE_SIZE, (page - 1) * PAGE_SIZE);
   const note = found.total
     ? 'Pending: Approve or Reject on the mod-log entry. Hidden: `/mod restore` or `/mod delete`. Scheduled: posts when posting resumes, `/mod delete` to stop it.'
     : '';
   return listEmbed(guild, 'Moderation queue', found, page, 'Nothing is waiting. 🎉', note);
 }
 
-export function searchEmbed(guild, filters, page = 1) {
-  const found = db.searchConfessions(guild.id, filters, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+export async function searchEmbed(guild, filters, page = 1) {
+  const found = await db.searchConfessions(guild.id, filters, PAGE_SIZE, (page - 1) * PAGE_SIZE);
   const used = [
     filters.text ? `text “${filters.text.replace(/[[\]|`]/g, '')}”` : null,
     filters.tag ? tagText(filters.tag) : null,
@@ -63,9 +63,9 @@ export function searchEmbed(guild, filters, page = 1) {
   return listEmbed(guild, 'Search results', found, page, 'No submission matches.', used.length ? `Filters: ${used.join(', ')}` : 'Newest submissions');
 }
 
-export function statsEmbed(guild, days = 30, now = Date.now()) {
-  const s = db.guildStats(guild.id, now - days * DAY_MS);
-  const cfg = db.getGuild(guild.id) ?? {};
+export async function statsEmbed(guild, days = 30, now = Date.now()) {
+  const s = await db.guildStats(guild.id, now - days * DAY_MS);
+  const cfg = await db.getGuild(guild.id) ?? {};
   const count = (status) => s.byStatus.get(status) ?? 0;
   const total = [...s.byStatus.values()].reduce((a, b) => a + b, 0);
   const topics = s.topics.length

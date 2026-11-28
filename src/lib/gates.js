@@ -29,9 +29,9 @@ export function checkEligibility(member, cfg) {
 }
 
 /** At most `daily_cap` posts per rolling 24 hours (rejected posts do not count). */
-export function checkDailyCap(guildId, userId, cfg) {
+export async function checkDailyCap(guildId, userId, cfg) {
   if (!(cfg.daily_cap > 0)) return null;
-  const times = db.postTimesSince(guildId, userId, Date.now() - DAY); // oldest first
+  const times = await db.postTimesSince(guildId, userId, Date.now() - DAY); // oldest first
   if (times.length < cfg.daily_cap) return null;
   // The slot that frees up first is the one `cap` places from the newest.
   const frees = times[times.length - cfg.daily_cap] + DAY;
@@ -69,11 +69,11 @@ export function similarity(a, b) {
 }
 
 /** True when anyone in this server already posted (about) the same text within `hours`. */
-export function isDuplicate(guildId, content, hours) {
+export async function isDuplicate(guildId, content, hours) {
   if (!(hours > 0)) return false;
   const text = normalize(content);
   if (text.length < MIN_DUP_LEN) return false;
-  for (const row of db.recentContents(guildId, Date.now() - hours * 3_600_000, DUP_CANDIDATES)) {
+  for (const row of await db.recentContents(guildId, Date.now() - hours * 3_600_000, DUP_CANDIDATES)) {
     const other = normalize(row.content);
     if (other.length < MIN_DUP_LEN) continue;
     if (other === text) return true;

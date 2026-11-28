@@ -29,7 +29,7 @@ export default {
     // No deferReply here: the PIN pop-up has to be the first response.
     const no = (content) => interaction.reply({ content, flags: MessageFlags.Ephemeral });
     if (!(await isOwner(interaction))) return no('Only the server owner can use this.');
-    if (!hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
+    if (!await hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
 
     const picked = interaction.options.getUser('user')?.id ?? null;
     const typed = interaction.options.getString('user_id')?.trim().replace(/^<@!?(\d+)>$/, '$1') || null;
@@ -43,12 +43,12 @@ export default {
     const what = !wanted ? null : wanted.toLowerCase() === 'all' ? 'all' : parseWarningCode(wanted);
     if (wanted && !what) return no('Give a warning ID like `W-0042`, or `all`.');
 
-    return promptPin(interaction, 'action', {
+    return await promptPin(interaction, 'action', {
       run: async (modal, guild) => {
         await modal.deferReply({ flags: MessageFlags.Ephemeral });
         if (!what) {
           rememberReason(modal.user.id, userId, reason);
-          return modal.editReply(clearPanel(guild, userId));
+          return modal.editReply(await clearPanel(guild, userId));
         }
         return modal.editReply(await liftForUser(modal.client, guild, userId, what, modal.user, reason));
       },

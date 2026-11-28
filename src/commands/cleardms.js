@@ -38,7 +38,7 @@ export default {
     // No deferReply here: the PIN pop-up has to be the first response.
     const no = (content) => interaction.reply({ content, flags: MessageFlags.Ephemeral });
     if (!(await isOwner(interaction))) return no('Only the server owner can use this.');
-    if (!hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
+    if (!await hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
     if (isClearing(interaction.guildId)) return no('A clear is already running for this server.');
 
     const everyone = interaction.options.getBoolean('everyone');
@@ -48,7 +48,7 @@ export default {
     if (picked) ids.add(picked.id);
     if (!everyone && !roleId && !ids.size) return no('Pick who to clear: `everyone`, a `role` (or `role_id`), a `user`, or `user_ids`.');
 
-    return promptPin(interaction, 'action', {
+    return await promptPin(interaction, 'action', {
       run: async (modal, guild) => {
         await modal.deferReply({ flags: MessageFlags.Ephemeral });
         return confirmAndClear(modal, guild, { everyone, roleId, ids });

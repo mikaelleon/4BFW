@@ -40,8 +40,8 @@ const buttons = (token, confirm, label) => [
   ),
 ];
 
-function previewPayload(guild, token, d) {
-  const cfg = db.getGuild(guild.id);
+async function previewPayload(guild, token, d) {
+  const cfg = await db.getGuild(guild.id);
   const tag = getTag(d.extras.tag);
   const { files, imageName } = postFiles(d.image, d.extras.cw);
   let body = renderBody(d.content, d.extras.cw);
@@ -79,12 +79,12 @@ function holdQuestion(guild, prompt, userId, content, replyTo, image, extras) {
  * -> { result } after a submit, or { preview } (a message payload) for the caller to send.
  */
 export async function submitOrPreview(guild, userId, content, replyTo, image, extras = {}) {
-  if (db.getPrefs(userId).preview) {
+  if ((await db.getPrefs(userId)).preview) {
     // Someone who cannot submit gets the reason straight away instead of a preview that fails on the button.
     const blocked = await whyCannotPost(guild, userId);
     if (blocked) return { result: { ok: false, error: blocked } };
     const { token, draft } = stash(userId, guild.id, content, replyTo, image, extras);
-    return { preview: previewPayload(guild, token, draft) };
+    return { preview: await previewPayload(guild, token, draft) };
   }
   const result = await submitConfession(guild, userId, content, replyTo, image, extras);
   if (result.needsConfirm) return { preview: holdQuestion(guild, result.prompt, userId, content, replyTo, image, extras) };

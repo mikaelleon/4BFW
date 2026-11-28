@@ -15,9 +15,9 @@ export default {
   async execute(interaction) {
     const no = (content) => interaction.reply({ content, flags: MessageFlags.Ephemeral });
     if (!(await isOwner(interaction))) return no('Only the server owner can look up sender IDs.');
-    if (!hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
+    if (!await hasPin(interaction.guildId)) return no('You have no PIN yet. Run `/ownerpin` to set one, then try again.');
     const subId = interaction.options.getInteger('id', true);
-    if (!db.getConfessionBySubId(interaction.guildId, subId)) return no(`There is no submission with ID \`${subId}\` in this server.`);
-    return promptPin(interaction, 'sender', { subId });
+    if (!await db.getConfessionBySubId(interaction.guildId, subId)) return no(`There is no submission with ID \`${subId}\` in this server.`);
+    return await promptPin(interaction, 'sender', { subId });
   },
 };

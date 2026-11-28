@@ -33,18 +33,18 @@ export function parsePollOptions(text, separator = /\r?\n/) {
 
 const gone = (interaction, text = 'That submission is no longer available.') => interaction.reply({ content: text, flags: EPHEMERAL });
 
-function targetOf(interaction) {
+async function targetOf(interaction) {
   if (!interaction.inGuild()) return null;
-  const target = db.getConfessionByMessage(interaction.guildId, interaction.message.id);
+  const target = await db.getConfessionByMessage(interaction.guildId, interaction.message.id);
   return target && target.status === 'posted' ? target : null;
 }
 
 export async function handleReactionButton(interaction) {
   const kind = interaction.customId.split(':')[2];
-  const target = targetOf(interaction);
+  const target = await targetOf(interaction);
   if (!target || !KINDS.has(kind)) return gone(interaction);
-  db.toggleReaction(target.id, interaction.user.id, kind);
-  await interaction.update({ components: postComponents(db.getConfession(interaction.guildId, target.id)) });
+  await db.toggleReaction(target.id, interaction.user.id, kind);
+  await interaction.update({ components: await postComponents(await db.getConfession(interaction.guildId, target.id)) });
   // Featured channel (/setup featured): may now qualify, or its copy needs new numbers.
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId).catch(() => null));
   if (guild) maybeFeature(guild, target).catch((err) => console.error('Feature check failed:', err));
@@ -52,11 +52,12 @@ export async function handleReactionButton(interaction) {
 
 export async function handleVoteButton(interaction) {
   const idx = Number(interaction.customId.split(':')[2]);
-  const target = targetOf(interaction);
-  if (!target || !target.is_poll || !db.getPollOptions(target.id).some((o) => o.idx === idx)) return gone(interaction);
+  const target = await targetOf(interaction);
+  if (!target || !target.is_poll || !(await db.getPollOptions(target.id)).some((o) => o.idx === idx)) return gone(interaction);
   if (target.poll_closed_at) return gone(interaction, 'This poll is closed.');
-  db.togglePollVote(target.id, interaction.user.id, idx);
-  return interaction.update({ components: postComponents(target) });
+  if ((await db.togglePollVote(target.id, interaction.user.id, idx)) === undefined) return gone(interaction, 'This poll is closed.');
+  // Read again: the poll may have closed meanwhile, and old data would switch its buttons back on.
+  return interaction.update({ components: await postComponents(await db.getConfession(interaction.guildId, target.id)) });
 }
 
 /* ---------- closing a poll ---------- */
@@ -64,9 +65,9 @@ export async function handleVoteButton(interaction) {
 const BAR = 10;
 
 /** Results card: one bar per option, the winner (or winners) marked. */
-function resultsEmbed(row) {
-  const options = db.getPollOptions(row.id);
-  const votes = db.pollCounts(row.id);
+async function resultsEmbed(row) {
+  const options = await db.getPollOptions(row.id);
+  const votes = await db.pollCounts(row.id);
   const counts = options.map((o) => votes.get(o.idx) ?? 0);
   const total = counts.reduce((a, b) => a + b, 0);
   const top = Math.max(0, ...counts);
@@ -85,29 +86,29 @@ function resultsEmbed(row) {
 
 /** Lock the voting buttons, mark the poll closed and reply with the results. False when it was not open. */
 export async function closePoll(guild, row) {
-  const fresh = db.getConfession(guild.id, row.id);
+  const fresh = await db.getConfession(guild.id, row.id);
   if (!fresh?.is_poll || fresh.poll_closed_at || fresh.status !== 'posted') return false;
-  if (!db.closePollRow(fresh.id)) return false;
-  const closed = db.getConfession(guild.id, fresh.id);
+  if (!await db.closePollRow(fresh.id)) return false;
+  const closed = await db.getConfession(guild.id, fresh.id);
   const msg = await fetchPostMessage(guild, closed);
   if (!msg) return false;
-  const image = closed.has_image ? db.getConfessionImage(closed.id) : null;
-  const post = buildPost(closed, image);
+  const image = closed.has_image ? await db.getConfessionImage(closed.id) : null;
+  const post = await buildPost(closed, image);
   // Only the embed and buttons change; the attachments stay as they are.
   // An image can be missing from the database (left out of a restored backup): point at the one already on the message.
   const kept = closed.has_image && !image && !closed.cw ? msg.attachments.first()?.name : null;
   if (kept) post.embeds[0].setImage(`attachment://${kept}`);
   await msg.edit({ embeds: post.embeds, components: post.components });
-  await msg.reply({ embeds: [resultsEmbed(closed)], allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
+  await msg.reply({ embeds: [await resultsEmbed(closed)], allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
   return true;
 }
 
 /** "Close poll" button: the author of the poll, or a moderator. */
 export async function handleClosePollButton(interaction) {
-  const target = targetOf(interaction);
+  const target = await targetOf(interaction);
   if (!target?.is_poll) return gone(interaction);
   const isAuthor = target.author_key === userKey(interaction.guildId, interaction.user.id);
-  const isMod = isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId));
+  const isMod = isModerator(interaction.member, interaction.memberPermissions, await db.getGuild(interaction.guildId));
   if (!isAuthor && !isMod) return gone(interaction, 'Only the author of this poll, or a moderator, can close it.');
   await interaction.deferUpdate();
   const guild = interaction.guild ?? (await interaction.client.guilds.fetch(interaction.guildId));
@@ -116,7 +117,7 @@ export async function handleClosePollButton(interaction) {
 
 /** Scheduler: close every poll whose end time has passed. */
 export async function sweepPolls(client) {
-  for (const row of db.listDuePolls()) {
+  for (const row of await db.listDuePolls()) {
     const guild = client.guilds.cache.get(row.guild_id);
     if (!guild) continue;
     await closePoll(guild, row).catch((err) => console.error(`Closing poll ${row.id} failed:`, err));

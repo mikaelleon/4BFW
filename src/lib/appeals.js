@@ -11,6 +11,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
+import { withKeyLock } from './locks.js';
 import * as db from '../db.js';
 import { MAX_APPEAL_LEN, submitBanAppeal } from './ban-appeals.js';
 import { isModerator } from './context.js';
@@ -40,8 +41,12 @@ export function submitAppeal(interaction) {
 }
 
 /** Core of both the /appeal command and the appeal form. Returns the text to show the user. */
-async function fileWarningAppeal(client, user, warningId, message) {
-  const warning = warningId ? db.getWarning(warningId) : null;
+function fileWarningAppeal(client, user, warningId, message) {
+  return withKeyLock(`appeal:${warningId}`, () => fileNow(client, user, warningId, message));
+}
+
+async function fileNow(client, user, warningId, message) {
+  const warning = warningId ? await db.getWarning(warningId) : null;
   // Same answer for "does not exist" and "is not yours", so IDs cannot be probed.
   if (!warning || warning.user_id !== userKey(warning.guild_id, user.id)) {
     return 'I could not find that warning on your account. Use the ID from the warning DM, like `W-0042`.';
@@ -50,20 +55,20 @@ async function fileWarningAppeal(client, user, warningId, message) {
   const guild = client.guilds.cache.get(warning.guild_id);
   if (!guild) return 'I can no longer reach that server.';
 
-  const existing = db.getAppeal(warningId);
+  const existing = await db.getAppeal(warningId);
   if (existing) {
     return existing.status === 'open'
       ? 'You already appealed this warning. A moderator will review it and I will DM you the result.'
       : `This warning was already reviewed (${existing.status}).`;
   }
 
-  const cfg = db.getGuild(guild.id);
+  const cfg = await db.getGuild(guild.id);
   if (!cfg?.log_channel_id) {
     return 'This server has no moderation log set up, so I cannot pass your appeal on. Message a moderator of the server directly.';
   }
 
-  const row = warning.confession_id ? db.getConfession(guild.id, warning.confession_id) : null;
-  db.addAppeal(warningId, guild.id, user.id, message);
+  const row = warning.confession_id ? await db.getConfession(guild.id, warning.confession_id) : null;
+  await db.addAppeal(warningId, guild.id, user.id, message);
 
   const fields = [
     { name: 'Warning ID', value: warningCode(warningId), inline: true },
@@ -99,14 +104,14 @@ export async function handleAppealFormButton(interaction) {
   if (!guild) return interaction.reply({ content: 'I can no longer reach that server.', flags: EPHEMERAL });
 
   const options = [];
-  const ban = db.getBan(guildId, interaction.user.id);
-  const banAppeal = db.latestBanAppeal(guildId, interaction.user.id);
+  const ban = await db.getBan(guildId, interaction.user.id);
+  const banAppeal = await db.latestBanAppeal(guildId, interaction.user.id);
   if (ban && banAppeal?.status !== 'open') {
     options.push({ label: 'Posting ban', description: clip(ban.reason ?? 'No reason given', 100), value: 'ban', emoji: '🚫' });
   }
-  for (const w of db.listWarnings(guildId, interaction.user.id)) {
-    if (w.expired || db.getAppeal(w.id)) continue; // expired ones no longer count; one appeal per warning
-    const post = w.confession_id ? db.getConfession(guildId, w.confession_id) : null;
+  for (const w of await db.listWarnings(guildId, interaction.user.id)) {
+    if (w.expired || await db.getAppeal(w.id)) continue; // expired ones no longer count; one appeal per warning
+    const post = w.confession_id ? await db.getConfession(guildId, w.confession_id) : null;
     options.push({
       label: `${warningCode(w.id)} · Warning${post?.number ? ` on #${String(post.number).padStart(3, '0')}` : ''}`,
       description: clip(w.reason ?? 'No reason given', 100),
@@ -158,28 +163,33 @@ export async function handleAppealModal(interaction) {
     return interaction.editReply(await submitBanAppeal(guild, interaction.user, why));
   }
   const warningId = Number(what.slice(1));
-  const warning = db.getWarning(warningId);
+  const warning = await db.getWarning(warningId);
   if (!warning || warning.guild_id !== guildId) return interaction.editReply('I could not find that warning on your account.');
   return interaction.editReply(await fileWarningAppeal(interaction.client, interaction.user, warningId, why));
 }
 
 /** Overturn / Uphold buttons on an appeal entry. */
-export async function handleAppealButton(interaction) {
+export function handleAppealButton(interaction) {
+  // Two moderators pressing at once: the second one finds the appeal already resolved.
+  return withKeyLock(`appeal:${Number(interaction.customId.split(':')[2])}`, () => reviewAppeal(interaction));
+}
+
+async function reviewAppeal(interaction) {
   const [, action, idText] = interaction.customId.split(':');
   const warningId = Number(idText);
   const deny = (content) => interaction.reply({ content, flags: EPHEMERAL });
 
-  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, db.getGuild(interaction.guildId))) {
+  if (!interaction.inGuild() || !isModerator(interaction.member, interaction.memberPermissions, await db.getGuild(interaction.guildId))) {
     return deny('Only moderators can review appeals.');
   }
-  const appeal = db.getAppeal(warningId);
+  const appeal = await db.getAppeal(warningId);
   if (!appeal || appeal.guild_id !== interaction.guildId) return deny('That appeal no longer exists.');
   if (appeal.status !== 'open') return deny(`That appeal was already ${appeal.status}.`);
 
   await interaction.deferUpdate();
   const overturn = action === 'overturn';
-  if (overturn) db.deleteWarning(warningId);
-  db.resolveAppeal(warningId, overturn ? 'overturned' : 'upheld', interaction.user.id);
+  if (overturn) await db.deleteWarning(warningId);
+  await db.resolveAppeal(warningId, overturn ? 'overturned' : 'upheld', interaction.user.id);
 
   const { guild, client } = interaction;
   const code = warningCode(warningId);

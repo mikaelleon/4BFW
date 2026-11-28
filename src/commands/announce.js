@@ -28,7 +28,7 @@ export default {
     const { guild, error } = await resolveGuild(interaction, { admin: true, manageOnly: true });
     if (error) return interaction.editReply(error);
 
-    const cfg = db.getGuild(guild.id);
+    const cfg = await db.getGuild(guild.id);
     if (!cfg?.channel_id) return interaction.editReply('Run `/setup channel` first so the guide can point somewhere.');
     if (isBroadcasting(guild.id)) return interaction.editReply('A broadcast is already running for this server.');
 

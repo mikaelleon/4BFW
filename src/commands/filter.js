@@ -72,8 +72,8 @@ export default {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const { guild, error } = await resolveGuild(interaction, { admin: true, manageOnly: true });
     if (error) return interaction.editReply(error);
-    db.updateGuild(guild.id, {}); // make sure the server has a settings row
-    const cfg = db.getGuild(guild.id);
+    await db.updateGuild(guild.id, {}); // make sure the server has a settings row
+    const cfg = await db.getGuild(guild.id);
     const sub = interaction.options.getSubcommand();
 
     if (sub === 'add') {
@@ -84,16 +84,16 @@ export default {
         const problem = regexProblem(pattern);
         if (problem) return interaction.editReply(problem);
       }
-      const rules = db.listFilterRules(guild.id);
+      const rules = await db.listFilterRules(guild.id);
       if (rules.length >= MAX_RULES) return interaction.editReply(`You can have at most ${MAX_RULES} rules. Remove some first.`);
       if (rules.some((r) => r.kind === kind && r.pattern.toLowerCase() === pattern.toLowerCase())) return interaction.editReply('That rule already exists.');
-      const id = db.addFilterRule(guild.id, kind, pattern);
+      const id = await db.addFilterRule(guild.id, kind, pattern);
       return interaction.editReply(`Rule **#${id}** added (${kind}: \`${pattern}\`). ${cfg.filter_action === 'hold' ? 'Matching posts are held for a moderator.' : 'Matching posts are rejected.'}`);
     }
 
     if (sub === 'remove') {
       const id = interaction.options.getInteger('id', true);
-      return interaction.editReply(db.removeFilterRule(guild.id, id) ? `Rule #${id} removed.` : `There is no rule #${id}.`);
+      return interaction.editReply(await db.removeFilterRule(guild.id, id) ? `Rule #${id} removed.` : `There is no rule #${id}.`);
     }
 
     if (sub === 'settings') {
@@ -105,18 +105,18 @@ export default {
       if (invites !== null) patch.block_invites = invites ? 1 : 0;
       if (links !== null) patch.block_links = links ? 1 : 0;
       if (!Object.keys(patch).length) return interaction.editReply('Nothing to change. Pass at least one option.');
-      return interaction.editReply(`Saved.\n${settingsText(db.updateGuild(guild.id, patch))}`);
+      return interaction.editReply(`Saved.\n${settingsText(await db.updateGuild(guild.id, patch))}`);
     }
 
     if (sub === 'test') {
-      const hit = checkFilters(guild.id, [interaction.options.getString('text', true)], { cfg });
+      const hit = await checkFilters(guild.id, [interaction.options.getString('text', true)], { cfg });
       return interaction.editReply(
         hit ? `**Would be ${cfg.filter_action === 'hold' ? 'held' : 'rejected'}.** Matched: ${hit.detail}` : 'No match. This text would be posted normally.',
       );
     }
 
     // list
-    const rules = db.listFilterRules(guild.id);
+    const rules = await db.listFilterRules(guild.id);
     const embed = new EmbedBuilder()
       .setColor(COLOR)
       .setTitle('Auto-filter')

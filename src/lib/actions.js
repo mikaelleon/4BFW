@@ -1,4 +1,5 @@
 // Moderation actions shared by the /mod slash commands and the buttons under each mod-log entry.
+import { withKeyLock } from './locks.js';
 import * as db from '../db.js';
 import { deleteConfessionMessage, restoreConfessionMessage } from './confession.js';
 import { untilTag } from './duration.js';
@@ -31,17 +32,22 @@ export async function deleteSubmission(guild, row, actor, reason) {
   return `Submission ${label(row)} deleted.`;
 }
 
-export async function warnAuthor(client, guild, row, actor, reason, { alsoDelete = false } = {}) {
-  const cfg = db.getGuild(guild.id);
+/** One warning at a time per author, so two moderators cannot both trigger the limit ban. */
+export function warnAuthor(client, guild, row, actor, reason, options) {
+  return withKeyLock(`warn:${guild.id}:${row.author_key}`, () => warnNow(client, guild, row, actor, reason, options));
+}
+
+async function warnNow(client, guild, row, actor, reason, { alsoDelete = false } = {}) {
+  const cfg = await db.getGuild(guild.id);
   const limit = cfg.warn_limit;
-  const warningId = db.addWarning(guild.id, row.author_key, row.id, reason);
-  const count = db.countWarnings(guild.id, row.author_key);
+  const warningId = await db.addWarning(guild.id, row.author_key, row.id, reason);
+  const count = await db.countWarnings(guild.id, row.author_key);
   if (alsoDelete) await deleteConfessionMessage(guild, row);
   const base = logBase(guild, row, actor, { gone: alsoDelete });
 
   // Reaching the limit bans the author; the warning DM then carries the restriction notice (one message, not two).
-  const autoBan = count >= limit && !db.getBan(guild.id, row.author_key);
-  if (autoBan) db.banUser(guild.id, row.author_key, `Reached ${limit} warnings`, actor.id, null);
+  const autoBan = count >= limit && !await db.getBan(guild.id, row.author_key);
+  if (autoBan) await db.banUser(guild.id, row.author_key, `Reached ${limit} warnings`, actor.id, null);
 
   const dmed = await dmUser(
     client,
@@ -73,9 +79,9 @@ export async function warnAuthor(client, guild, row, actor, reason, { alsoDelete
 
 /** `durationMs` = timed ban (lifts itself), null = permanent. */
 export async function banAuthor(client, guild, row, actor, reason, { alsoDelete = true, durationMs = null } = {}) {
-  const already = db.getBan(guild.id, row.author_key);
+  const already = await db.getBan(guild.id, row.author_key);
   const expiresAt = durationMs ? Date.now() + durationMs : null;
-  db.banUser(guild.id, row.author_key, reason ?? 'No reason given', actor.id, expiresAt, row.author_id);
+  await db.banUser(guild.id, row.author_key, reason ?? 'No reason given', actor.id, expiresAt, row.author_id);
   const lasts = expiresAt ? `until ${untilTag(expiresAt)}` : 'permanently';
   if (alsoDelete) await deleteConfessionMessage(guild, row);
   await dmUser(client, row.author_id, banNotice(guild, row, { reason, until: expiresAt ? untilTag(expiresAt) : null, deleted: alsoDelete }));
@@ -91,8 +97,8 @@ export async function banAuthor(client, guild, row, actor, reason, { alsoDelete 
 }
 
 export async function unbanAuthor(client, guild, row, actor, { clearWarnings = true } = {}) {
-  if (!db.unbanUser(guild.id, row.author_key)) return 'That author is not banned.';
-  if (clearWarnings) db.clearWarnings(guild.id, row.author_key);
+  if (!await db.unbanUser(guild.id, row.author_key)) return 'That author is not banned.';
+  if (clearWarnings) await db.clearWarnings(guild.id, row.author_key);
   const reset = clearWarnings ? ' Your warnings were cleared too.' : '';
   await dmUser(client, row.author_id, notice(`Ban lifted in ${guild.name}`, `A moderator lifted your posting ban. You can post again.${reset} Please follow the rules.`));
   await modLog(guild, { ...logBase(guild, row, actor), title: 'Author unbanned' });
@@ -122,7 +128,7 @@ export async function restoreSubmission(guild, row, actor) {
 
 /** Private moderator note on the author of a submission. */
 export async function noteAuthor(guild, row, actor, text) {
-  db.addNote(guild.id, row.author_key, row.id, text, actor.id);
+  await db.addNote(guild.id, row.author_key, row.id, text, actor.id);
   await modLog(guild, { ...logBase(guild, row, actor), title: 'Note added', reason: text });
   return `Note saved on the author of ${label(row)}. See it with \`/mod history\`.`;
 }

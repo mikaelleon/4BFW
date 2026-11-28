@@ -27,7 +27,7 @@ export async function ensureThread(guild, root) {
     const thread =
       (message.hasThread ? await openChannel(guild, message.id) : null) ??
       (await message.startThread({ name: `Replies to ${anonRef(root.number)}`, autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek }));
-    db.setThread(root.id, thread.id);
+    await db.setThread(root.id, thread.id);
     return { thread };
   } catch (err) {
     console.error('Could not open a reply thread:', err.message);

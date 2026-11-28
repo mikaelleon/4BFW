@@ -15,12 +15,12 @@ export default {
 
   async execute(interaction) {
     const reply = (content) => interaction.reply({ content, flags: MessageFlags.Ephemeral });
-    const row = db.getConfessionByMessage(interaction.guildId, interaction.targetId);
+    const row = await db.getConfessionByMessage(interaction.guildId, interaction.targetId);
     if (!row) return reply('That message is not a submission I posted.');
     if (row.author_key !== userKey(interaction.guildId, interaction.user.id)) return reply('You can only delete your own submissions.');
     if (row.status === 'deleted') return reply('That submission is already deleted.');
 
-    const minutes = db.getGuild(interaction.guildId)?.self_delete_minutes ?? 0;
+    const minutes = (await db.getGuild(interaction.guildId))?.self_delete_minutes ?? 0;
     if (minutes <= 0) return reply('Deleting your own submissions is turned off in this server. Ask a moderator.');
     const left = (row.posted_at ?? row.created_at) + minutes * 60_000 - Date.now(); // counted from when it went up
     if (left <= 0) return reply(`You can only delete a submission within ${minutes} minute${minutes === 1 ? '' : 's'} of posting it. Ask a moderator.`);
