@@ -39,7 +39,7 @@ const STYLE = String.raw`
     --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: oklch(.75 .105 13); --fill: oklch(.47 .105 13); --marker: oklch(.768 .11 68);
     --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring), 0 2px 4px rgb(0 0 0 / .16), 0 12px 24px -16px rgb(0 0 0 / .16);
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased; }
   [hidden] { display: none !important; }
@@ -131,6 +131,8 @@ const STYLE = String.raw`
   .js .doc + .doc { margin-top: 0; }
   article { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 4px; margin-bottom: 16px; scroll-margin-top: 80px; }
   article.here { box-shadow: 0 0 0 2px var(--accent); }
+  article:focus { outline: none; }
+  .keys article:focus { outline: 2px solid var(--ink); outline-offset: 2px; }
   article > * { grid-column: 2; }
   .num { grid-column: 1; grid-row: 1; position: relative; display: grid; place-items: center; width: 40px; height: 40px;
     border-radius: var(--r2); background: var(--inner); color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; text-decoration: none; }
@@ -146,7 +148,7 @@ const STYLE = String.raw`
   article aside { grid-column: 1 / -1; padding: .75rem 1rem .75rem 3.5rem; border-radius: var(--r2); background: var(--inner); color: var(--muted); }
   article a:not(.num) { color: var(--accent); text-underline-offset: 3px; }
   /* A taller target for links inside text, without moving the lines. */
-  article p a { padding-block: .65rem; }
+  article p a, article li a { padding-block: .65rem; }
   .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
   .js:not([data-page="home"]) .cta { display: none; }
   .action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 48px; padding-inline: 24px;
@@ -160,19 +162,20 @@ const STYLE = String.raw`
 
   .js[data-page="home"] nav.toc { display: none; }
   .js[data-page="home"] main { grid-template-columns: minmax(0, 1fr); }
-  .sample { display: none; margin: 0; }
-  .sample.post { margin: 0; padding: 1rem 1.25rem; background: var(--card); box-shadow: var(--lift); }
+  .sample { display: none; }
+  .js:not([data-page="home"]) .sample { display: none; }
+  .js[data-page="home"] .sample { display: block; }
+  .sample.post { margin: 16px 0 0; padding: 1rem 1.25rem; background: var(--card); box-shadow: var(--lift); }
   .by { display: flex; align-items: center; gap: .5rem; margin-top: .75rem !important; font-size: .875rem; }
   .by span { padding: .1rem .5rem; border-radius: var(--r3); background: var(--ink); color: var(--bg); user-select: none; }
   @media (min-width: 56rem) {
     .js[data-page="home"] header { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; align-items: center; gap: 48px; }
-    .js[data-page="home"] header .sample { display: block; }
+    .sample.post { margin: 0; }
     #home { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 16px; }
     #home article { align-content: start; }
     #home article p { grid-column: 1 / -1; }
     #home article:nth-of-type(4), #home .elsewhere { grid-column: 1 / -1; }
   }
-  @media (max-width: 55.99rem) { #home .sample { display: block; margin-bottom: 16px; } }
 
   .who { margin-bottom: 16px; }
   .who h3 { padding: .5rem .75rem .75rem; }
@@ -195,6 +198,7 @@ const STYLE = String.raw`
   .js .answers b { display: none; }
   mark { background: var(--marker); color: var(--on-marker); }
   .empty { padding-inline: .75rem; color: var(--muted); }
+  .searching .hint, .nothing nav.toc { display: none !important; }
   .elsewhere { display: flex; flex-wrap: wrap; gap: 8px; }
   .elsewhere button { min-height: 44px; padding-inline: 22px; border-radius: var(--r2); background: var(--card); box-shadow: var(--lift);
     color: var(--accent); }
@@ -212,10 +216,10 @@ const STYLE = String.raw`
 
   /* Motion and feedback. Transitions start after the first paint, and are off for keyboard use: tabs and keys answer on the
      next frame. Colors never fade across a theme swap. */
-  .ready:not(.keys) :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button) {
+  .ready:not(.keys) :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button, .toggle) {
     transition: scale var(--t-press) var(--ease-out), background-color var(--t-press) ease, filter var(--t-press) ease,
       box-shadow var(--t-press) ease; }
-  .ready.swapping :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button) {
+  .ready.swapping :is(.tabs button, .num, #theme, .who label, footer a, .toc a, .toc summary, .action, .elsewhere button, .toggle) {
     transition: none; }
   .ready:not(.keys) .toggle input::after { transition: transform var(--t-move) var(--ease-in-out); }
   .ready:not(.keys) #theme svg { transition: opacity var(--t-swap) var(--ease-swap), scale var(--t-swap) var(--ease-swap),
@@ -235,18 +239,19 @@ const STYLE = String.raw`
     .action:not(:first-child):hover { box-shadow: inset 0 0 0 1px var(--accent); }
   }
   /* Press: small controls shrink; wide surfaces and the toolbar change color instead. */
-  .num:active, .action:active, .elsewhere button:active { scale: .96; }
+  .num:active { scale: .96; }
   .tabs button:active, #theme:active, .who label:active, footer a:active, .toc a:active, .toc summary:active,
-  .action:not(:first-child):active { background-color: color-mix(in srgb, var(--accent) 22%, var(--card)); }
+  .action:not(:first-child):active, .elsewhere button:active, .toggle:active, article a:not(.num, .action):active {
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--card)); }
+  h1 a:active { opacity: .7; }
   .action:first-child:active { filter: brightness(.88); }
-  @media (max-width: 40rem) { .action:active { scale: 1; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
 
   @media (max-width: 56rem) {
-    .tools { grid-template: "tabs tabs theme" "search search examples" / minmax(0, 1fr) auto auto; }
+    .tools { grid-template: "tabs tabs theme" "search examples examples" / minmax(0, 1fr) auto 44px; }
     .tools #theme { justify-self: end; }
     .tools:has(.toggle[hidden]) #search { grid-column: 1 / -1; }
-    .tools:has(#search[hidden]) { grid-template: "tabs tabs theme" / minmax(0, 1fr) auto auto; }
+    .tools:has(#search[hidden]) { grid-template: "tabs tabs theme" / minmax(0, 1fr) auto 44px; }
     article { scroll-margin-top: 132px; }
   }
   @media (max-width: 40rem) {
@@ -262,7 +267,22 @@ const STYLE = String.raw`
     article ul { grid-column: 1 / -1; padding-left: 2rem; }
     article aside { padding-left: .75rem; }
     .js .answers { min-height: 6.4rem; }
-    .who label { font-size: .75rem; padding: 0; white-space: nowrap; }
+    .who label { padding: 0; white-space: nowrap; }
+    /* Past the home page the logo and date share one row, so the text starts higher. */
+    .js:not([data-page="home"]) header { padding-top: .75rem; padding-bottom: .5rem; }
+    .js:not([data-page="home"]) header > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+    .js:not([data-page="home"]) h1 { width: 5.5rem; margin: 0; }
+    .js:not([data-page="home"]) header .updated { margin: 0; }
+    /* One text edge, 20px inside every card. */
+    .toc summary, .toc a { padding-inline: .75rem; }
+    .toc a { padding-block: .75rem; }
+    .hint, .empty { padding-inline: 1.25rem; }
+    footer a { padding-inline: .75rem; }
+  }
+  /* A phone on its side: a pinned toolbar would take a third of the screen. */
+  @media (max-height: 30rem) and (max-width: 60rem) {
+    .bar { position: static; }
+    article { scroll-margin-top: 8px; }
   }
   @media print { .bar, .toc, .hint, .elsewhere { display: none !important; } .doc, aside, .answers li { display: block !important; } .who fieldset, .sent { display: none !important; } .answers b { display: inline !important; } article { display: grid !important; } main { display: block; } .card, article { box-shadow: none; } }
 `;
@@ -360,7 +380,7 @@ const SCRIPT = String.raw`
     }
     var target = document.getElementById(hash);
     var key = target ? hash : id;
-    history.replaceState(null, '', address(key));
+    history.replaceState(history.state, '', address(key));
     if (id !== current || key !== id) search.value = '';
     show(id);
     picked = key !== id ? target : null;
@@ -371,8 +391,15 @@ const SCRIPT = String.raw`
   }
 
   function go(key) {
+    history.replaceState({ y: scrollY }, '');
     history.pushState(null, '', address(key));
     route();
+  }
+
+  function revisit() {
+    var kept = history.state;
+    route();
+    if (kept && typeof kept.y === 'number') { window.scrollTo(0, kept.y); spy(); }
   }
 
   function unmark(el) {
@@ -440,6 +467,8 @@ const SCRIPT = String.raw`
       if (hit) found++;
       if (hit && term) highlight(a, term);
     });
+    root.classList.toggle('searching', !!term);
+    root.classList.toggle('nothing', !found);
     var empty = $('.empty', doc);
     empty.hidden = found > 0;
     if (!found) empty.textContent = 'No section here matches “' + search.value.trim() + '”. Try a shorter word, or clear the search.';
@@ -464,9 +493,10 @@ const SCRIPT = String.raw`
   tabs.forEach(function (tab, i) {
     tab.addEventListener('click', function () { go(tab.dataset.doc); });
     tab.addEventListener('keydown', function (e) {
-      var step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-      if (!step) return;
-      var next = tabs[(i + step + tabs.length) % tabs.length];
+      var to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      var next = tabs[(to + tabs.length) % tabs.length];
       next.focus();
       go(next.dataset.doc);
     });
@@ -477,6 +507,9 @@ const SCRIPT = String.raw`
       e.preventDefault();
       if (!wide.matches) fit();
       go(l.hash.slice(1));
+      var section = document.getElementById(l.hash.slice(1));
+      section.tabIndex = -1;
+      section.focus({ preventScroll: true });
     });
   });
 
@@ -490,6 +523,7 @@ const SCRIPT = String.raw`
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       go(l.dataset.page);
+      if (!l.getClientRects().length) $('[role="tab"][aria-selected="true"]').focus({ preventScroll: true });
     });
   });
 
@@ -529,6 +563,7 @@ const SCRIPT = String.raw`
 
   function showExamples() { $$('aside').forEach(function (a) { a.hidden = !examples.checked; }); }
   examples.addEventListener('change', function () {
+    save('examples', examples.checked ? '1' : '');
     showExamples();
     filter();
     spy();
@@ -537,17 +572,27 @@ const SCRIPT = String.raw`
   function isDark() {
     return root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   }
-  function label() { theme.setAttribute('aria-checked', isDark()); }
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', label);
-  theme.addEventListener('click', function () {
+  function label() {
+    theme.setAttribute('aria-checked', isDark());
+    $('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue('--bg').trim();
+  }
+  function swap() {
     root.classList.add('swapping');
     setTimeout(function () { root.classList.remove('swapping'); }, 50);
+  }
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { swap(); label(); });
+  theme.addEventListener('click', function () {
+    swap();
     root.dataset.theme = isDark() ? 'light' : 'dark';
     save('theme', root.dataset.theme);
     label();
   });
 
   search.addEventListener('input', function () { filter(); spy(); });
+  search.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') search.blur();
+    if (e.key === 'Escape' && search.value) { e.preventDefault(); search.value = ''; filter(); spy(); }
+  });
   addEventListener('scroll', spy, { passive: true });
   // Once the reader scrolls by hand, the contents list follows the scroll position again.
   ['wheel', 'touchmove', 'keydown', 'mousedown'].forEach(function (type) {
@@ -556,17 +601,25 @@ const SCRIPT = String.raw`
     }, { passive: true });
   });
   addEventListener('resize', spy);
-  addEventListener('hashchange', route);
-  addEventListener('popstate', route);
-  examples.checked = false;
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  addEventListener('hashchange', revisit);
+  addEventListener('popstate', revisit);
+  // iOS only shows :active styles on pages that listen for touches.
+  document.addEventListener('touchstart', function () {}, { passive: true });
+  examples.checked = !!saved('examples');
   showExamples();
   label();
   route();
   spy();
   setTimeout(function () { root.classList.add('ready'); }, 50);
-  // The browser jumps to "#terms" by itself once loaded: go back up so the title stays in view.
+  // The browser scrolls by itself once loaded. Put a linked section back under the toolbar, and anything else at the top so
+  // the title stays in view.
   addEventListener('load', function () {
-    if (location.hash.indexOf('-') === -1) setTimeout(function () { window.scrollTo(0, 0); }, 0);
+    setTimeout(function () {
+      if (picked) picked.scrollIntoView();
+      else window.scrollTo(0, 0);
+      spy();
+    }, 0);
   });
 })();
 `;
@@ -647,6 +700,7 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f5f0f2">
 <title>STFW · Server Thoughts Freedom Wall</title>
 <meta name="description" content="${names} of STFW, the Server Thoughts Freedom Wall Discord bot.">
 <style>${STYLE}</style>
@@ -657,7 +711,7 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
   <div class="tabs" role="tablist" aria-label="Document" style="--n: ${docs.length}">
     ${docs.map((d) => `<button type="button" role="tab" data-doc="${d.id}" aria-controls="${d.id}" aria-label="${d.name}">${tabName(d.name)}</button>`).join('')}
   </div>
-  <input type="search" id="search" placeholder="Search…" aria-label="Search this document">
+  <input type="search" id="search" placeholder="Search…" enterkeyhint="search" autocomplete="off" aria-label="Search this document">
   <label class="toggle">Examples <input type="checkbox" role="switch" id="examples"></label>
   <button type="button" id="theme" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
     ${SUN}${MOON}
@@ -689,7 +743,6 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
 <h2>${d.name}</h2>
 ${at ? '<p class="hint">Select a section number to copy its link.</p>' : ''}
 ${d.sections.map((s, i) => article(d.id, s, i + 1) + (d.who && d.who.after === i + 1 ? whoSeesWhat(d.who) : '')).join('\n')}
-${!at && sample ? samplePost(sample) : ''}
 <p class="empty" role="status" hidden>No section here matches your search</p>
 <div class="elsewhere"></div>
 </section>`,
