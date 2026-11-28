@@ -8,11 +8,10 @@ const running = new Set();
 
 export const GUIDE_PREFIX = 'guide';
 
-/** A "##" heading with its points quoted underneath. Shared by every list in the guide. */
-const block = (title, points) => [`## ${title}`, ...points.map((p) => `> - ${p}`)].join('\n');
+/** A "###" heading with its points quoted underneath. Shared by every list in the guide. */
+const block = (title, points) => [`### ${title}`,...points.map((p) => `> - ${p}`)].join('\n');
 
-function overviewPage({ cfg }) {
-  const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
+function overviewPage() {
   const url = legalUrl();
   // Without a public address there is no web page to link to.
   const links = url
@@ -28,15 +27,9 @@ function overviewPage({ cfg }) {
     '**STFW** · *noun* `/ˌɛs-ti-ɛf-ˈdʌbəl-ju/`',
     '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
     "*When you're told to STFU, let the wall do the talking instead.*",
-    '## Why does this exist?',
-    'Many students have something to say but hesitate to say it openly. The bot gives everyone a safe, simple space to speak up.',
     '',
-    'Confessions, crushes, shoutouts, questions, and appreciation posts are all welcome. Honest feedback about student life on campus, including constructive criticism of professors, is also allowed within the guidelines.',
-    '## What do we stand for?',
-    'The page supports freedom of expression with responsibility and respect. Every post goes through moderation to keep the space safe for everyone.',
-    '## Where do posts appear?',
-    `Every submission is posted in ${where}.`,
-    ...(links.length ? ['## Links', ...links.map((link) => `- ${link}`)] : []),
+    'Many students have something to say but hesitate to say it openly, and this wall lets them say it without their name attached. Whether it is a confession or a shoutout, you are welcome to share it here. Honest feedback about campus life, including constructive criticism of professors, is also allowed as long as it follows the Rules.',
+    ...(links.length ? ['### Links', ...links.map((link) => `- ${link}`)] : []),
   ].join('\n');
 }
 

@@ -2,6 +2,14 @@
 // It reads like a dictionary entry for STFW, with the sections as numbered senses.
 // Without JavaScript both documents simply show one after the other.
 
+import { readFileSync } from 'node:fs';
+
+// The official logos, inlined so the page stays a single file: maroon "st" for light, white "st" for dark.
+const logo = (name) => `data:image/png;base64,${readFileSync(new URL(`../assets/${name}`, import.meta.url)).toString('base64')}`;
+const LOGO_LIGHT = logo('logo-light.png');
+const LOGO_DARK = logo('logo-dark.png');
+const LOGO_HEIGHT = 292;
+
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const STYLE = String.raw`
@@ -9,7 +17,7 @@ const STYLE = String.raw`
   :root {
     color-scheme: light;
     --bg: #f5f0f2; --card: #fff; --inner: #f5f0f2; --ink: #241a1d; --muted: #685359; --accent: #821b33; --fill: #821b33;
-    --marker: #f0a03c; --mark-ink: #a95f06; --ring: rgb(80 20 35 / .09); --track: #d9cdd1; --on: 0;
+    --marker: #f0a03c; --ring: rgb(80 20 35 / .09); --track: #d9cdd1; --on: 0;
     --lift: 0 0 0 1px var(--ring), 0 1px 2px rgb(80 20 35 / .05), 0 10px 24px -16px rgb(80 20 35 / .25);
     --r1: 20px; --r2: 12px; --r3: 8px;
   }
@@ -17,13 +25,13 @@ const STYLE = String.raw`
     :root:not([data-theme="light"]) {
       color-scheme: dark;
       --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: #f08da2; --fill: #9c2a46;
-      --mark-ink: #f0a03c; --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
+      --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #140f11; --card: #211a1d; --inner: #2d2327; --ink: #f2ebed; --muted: #bcaab0; --accent: #f08da2; --fill: #9c2a46;
-    --mark-ink: #f0a03c; --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
+    --ring: rgb(255 255 255 / .08); --track: #4a3a40; --on: 1; --lift: 0 0 0 1px var(--ring);
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -38,8 +46,11 @@ const STYLE = String.raw`
   p, li { text-wrap: pretty; }
 
   header { padding-top: 3rem; padding-bottom: 1.5rem; }
-  h1 { margin: 0; font-size: clamp(2.5rem, 8vw, 4rem); font-weight: 600; line-height: 1; letter-spacing: -.022em; color: var(--accent); }
-  h1 span { color: var(--mark-ink); }
+  /* The two official logos sit on top of each other and the theme picks one, so nothing flashes or moves. */
+  h1 { display: grid; width: clamp(11rem, 40vw, 16rem); margin: 0 0 1.25rem; }
+  h1 img { grid-area: 1 / 1; width: 100%; height: auto; }
+  .logo-light { opacity: calc(1 - var(--on)); }
+  .logo-dark { opacity: var(--on); }
   header p { margin: .75rem 0 0; max-width: 40rem; }
   .say { color: var(--muted); }
   .sense { font-size: 1.15rem; line-height: 1.5; }
@@ -408,7 +419,10 @@ export function renderLegalPage({ updated, docs, related = [] }) {
 </head>
 <body>
 <header class="wrap">
-  <h1>ST<span>FW</span></h1>
+  <h1>
+    <img class="logo-light" src="${LOGO_LIGHT}" alt="STFW" width="784" height="${LOGO_HEIGHT}">
+    <img class="logo-dark" src="${LOGO_DARK}" alt="" width="784" height="${LOGO_HEIGHT}">
+  </h1>
   <p class="say"><i>noun</i> /ˌɛs-ti-ɛf-ˈdʌbəl-ju/</p>
   <p class="sense"><b>S</b>erver <b>T</b>houghts <b>F</b>reedom <b>W</b>all; an anonymous outlet for unfiltered thoughts and confessions.</p>
   <p class="updated">Last updated ${updated}</p>

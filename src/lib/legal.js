@@ -107,8 +107,7 @@ const PRIVACY = [
     points: [
       'Posts do not show your name or profile picture.',
       'Moderators see the text and images of submissions, but not sender IDs in the mod log.',
-      'The server owner can look up the sender of a submission using a private PIN.',
-      'Whoever runs the bot has access to its database.',
+      'Authorized administrators of the server and the bot can identify who sent a submission only when necessary, such as in cases of cyberbullying, online harassment, threats, or other serious harm, in accordance with Philippine law, including the Cybercrime Prevention Act of 2012 (Republic Act No. 10175) and the Safe Spaces Act (Republic Act No. 11313).',
       'Information may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.',
     ],
   },
@@ -158,7 +157,7 @@ const CONCERNS = 'Inquiries and concerns';
 const FAQ = [
   {
     title: 'Is it really anonymous?',
-    body: 'Your name and picture never show on a post. The bot does record the sender: the server owner can look it up with a PIN, and whoever runs the bot can access its data.',
+    body: 'Your name and picture never show on a post. The bot does record the sender for as long as the server’s retention period, or until the record is removed if no period is set. Authorized administrators of the server and the bot can identify who sent a post only when necessary, such as in cases of cyberbullying, online harassment, threats, or other serious harm, in accordance with Philippine law, including the Cybercrime Prevention Act of 2012 (Republic Act No. 10175) and the Safe Spaces Act (Republic Act No. 11313).',
   },
   {
     title: 'What can I post?',
