@@ -1,5 +1,6 @@
-// The /setup view embed: current settings grouped into sections. One full-width field per section, so it reads the
-// same on a phone and on a desktop. No emojis here: topic names are shown by label only.
+// The /setup view embed: current settings grouped into sections, two columns at most. Discord puts up to three inline
+// fields on a row, so each pair of inline sections is followed by a full-width field. Phones show one column.
+// No emojis here: topic names are shown by label only.
 import { EmbedBuilder } from 'discord.js';
 import * as db from '../db.js';
 import { COLOR, anonRef } from './format.js';
@@ -17,6 +18,9 @@ const onOff = (value) => (value ? 'On' : 'Off');
 
 /** A section from [label, value] pairs: one "Label: **value**" line each. */
 const section = (name, rows) => ({ name, value: rows.map(([label, value]) => `${label}: **${value}**`).join('\n') });
+
+/** The same, as one half of a two-column row. */
+const column = (name, rows) => ({ ...section(name, rows), inline: true });
 
 /** Topic routes, cut at a whole line if they would not fit in one field. */
 function topicLines(routes) {
@@ -46,7 +50,7 @@ export function settingsEmbed(guild, now = Date.now()) {
       ? `${HIGHLIGHTS[c.highlight_period]} in <#${c.highlight_channel_id}>`
       : 'Off';
   const quiet = hasQuietHours(c)
-    ? `${clockText(c.quiet_start)} to ${clockText(c.quiet_end)} ${process.env.TIMEZONE || 'Asia/Manila'} (${c.quiet_hold ? 'hold' : 'closed'})`
+    ? `${clockText(c.quiet_start)} to ${clockText(c.quiet_end)} (${c.quiet_hold ? 'hold' : 'closed'})`
     : 'Off';
 
   // A paused status can carry a reason on a second line: only the first line is bold.
@@ -59,35 +63,35 @@ export function settingsEmbed(guild, now = Date.now()) {
       [`Next public number: **${anonRef((c.counter ?? 0) + 1)}**`, `Submissions: **${status}**`, ...statusRest].join('\n'),
     )
     .addFields(
-      section('Channels', [
+      column('Channels', [
         ['Submissions', channel(c.channel_id)],
         ['Mod log', channel(c.log_channel_id)],
         ['Featured', c.featured_channel_id ? `<#${c.featured_channel_id}> at ${plural(c.featured_threshold, 'like')}` : 'Off'],
-        ['Post of the day / week', highlight],
+        ['Highlights', highlight],
       ]),
-      { name: 'Topic channels', value: topicLines(db.listTagChannels(guild.id)) },
-      section('Roles', [
+      column('Roles', [
         ['Moderator', role(c.mod_role_id)],
         ['Guide', role(c.role_id)],
         ['Online notice', role(c.online_role_id)],
       ]),
-      section('Posting', [
+      { name: 'Topic channels', value: topicLines(db.listTagChannels(guild.id)) },
+      column('Posting', [
         ['Cooldown', plural(c.cooldown ?? 30, 'second')],
-        ['Daily post cap', c.daily_cap > 0 ? `${c.daily_cap} per 24 hours` : 'Off'],
-        ['Repost blocker', c.dup_hours > 0 ? `Same text within ${plural(c.dup_hours, 'hour')}` : 'Off'],
-        ['Minimum time in server', c.min_join_days > 0 ? plural(c.min_join_days, 'day') : 'Off'],
-        ['Minimum account age', c.min_account_days > 0 ? plural(c.min_account_days, 'day') : 'Off'],
+        ['Daily cap', c.daily_cap > 0 ? `${c.daily_cap} per 24 hours` : 'Off'],
+        ['Repost blocker', c.dup_hours > 0 ? plural(c.dup_hours, 'hour') : 'Off'],
+        ['Server age', c.min_join_days > 0 ? plural(c.min_join_days, 'day') : 'Off'],
+        ['Account age', c.min_account_days > 0 ? plural(c.min_account_days, 'day') : 'Off'],
         ['Poll length', c.poll_hours > 0 ? plural(c.poll_hours, 'hour') : 'Until closed'],
         ['Reply threads', onOff(c.auto_thread)],
         ['Quiet hours', quiet],
       ]),
-      section('Moderation', [
-        ['Approval queue', c.approval_mode ? 'On (posts wait for a moderator)' : 'Off (post first, moderate after)'],
+      column('Moderation', [
+        ['Approval queue', onOff(c.approval_mode)],
         ['Auto-filter', filterSummary(c, db.listFilterRules(guild.id).length)],
-        ['Auto-hide', c.report_limit > 0 ? `At ${plural(c.report_limit, 'report')}` : 'Off'],
+        ['Auto-hide', c.report_limit > 0 ? plural(c.report_limit, 'report') : 'Off'],
         ['Warn limit', plural(c.warn_limit ?? 3, 'warning')],
         ['Warning expiry', c.warn_expiry_days > 0 ? plural(c.warn_expiry_days, 'day') : 'Never'],
-        ['Self-delete window', c.self_delete_minutes > 0 ? plural(c.self_delete_minutes, 'minute') : 'Off'],
+        ['Self-delete', c.self_delete_minutes > 0 ? plural(c.self_delete_minutes, 'minute') : 'Off'],
         ['Data retention', c.retention_days > 0 ? plural(c.retention_days, 'day') : 'Keep forever'],
       ]),
       section('Other', [
