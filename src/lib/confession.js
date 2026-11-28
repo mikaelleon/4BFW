@@ -216,7 +216,9 @@ function stickyPayload() {
         .setColor(COLOR)
         .setDescription(
           [
-            'Got a take too spicy for the group chat? Post it here and let people argue with the idea, not with you.',
+            '**STFW** · *noun* `/ˌɛs-ti-ɛf-ˈdʌbəl-ju/`',
+            '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
+            "*When you're told to STFU, let STFW do the talking instead.*",
             '',
             `-# tap **Write a Submission** below · or \`/fw\` · or DM me \`${prefix()} <message>\``,
           ].join('\n'),

@@ -116,40 +116,71 @@ const RULES = [
 ];
 
 const TERMS = [
-  [`Acceptance`, `By using this bot, you agree to these terms and the Posting Guidelines. If you disagree, please do not submit anything.`],
-  [`Your submissions`, `You are solely responsible for what you post. Only submit content you are willing to stand behind.`],
-  [`Prohibited use`, `Do not use the bot to harass, threaten, impersonate, or expose anyone. Spam and attempts to abuse the bot are also not allowed.`],
-  [`Moderation`, `Admins may review or remove any submission at their discretion. Repeat violators may be warned or banned from posting without notice.`],
-  [`No guarantees`, `The bot is provided "as is," and posts may be delayed or lost due to technical issues. Opinions in confessions belong to their authors, not the developer or the page.`],
-  [`Limitation of liability`, `The developer is not liable for any conflict, dispute, or harm arising from submitted content or use of the bot. Continued use means you accept these terms, which may be updated at any time.`],
+  [`Acceptance`, [
+    `By using this bot, you agree to these terms and the Posting Guidelines.`,
+    `If you disagree, please do not submit anything.`,
+  ]],
+  [`Your submissions`, [
+    `You are solely responsible for what you post.`,
+    `Only submit content you are willing to stand behind.`,
+  ]],
+  [`Prohibited use`, [
+    `Do not use the bot to harass, threaten, impersonate, or expose anyone.`,
+    `Spam and attempts to abuse the bot are also not allowed.`,
+  ]],
+  [`Moderation`, [
+    `Admins may review or remove any submission at their discretion.`,
+    `Repeat violators may be warned or banned from posting without notice.`,
+  ]],
+  [`No guarantees`, [
+    `The bot is provided "as is," and posts may be delayed or lost due to technical issues.`,
+    `Opinions in confessions belong to their authors, not the developer or the page.`,
+  ]],
+  [`Limitation of liability`, [
+    `The developer is not liable for any conflict, dispute, or harm arising from submitted content or use of the bot.`,
+    `Continued use means you accept these terms, which may be updated at any time.`,
+  ]],
 ];
 
 const PRIVACY = [
-  [`What we collect`, `The bot receives your submission text, your Discord user ID, and a timestamp. We do not collect your real name or contact details.`],
-  [`Anonymity`, `Confessions are posted without your name or profile picture. Avoid including identifying details if you want to stay anonymous.`],
-  [`How it's used`, `Your data is used only to deliver, review, and moderate submissions and to prevent abuse. It is never sold or shared with advertisers or third parties.`],
-  [`Who can see it`, `Only the developer and designated admins can access sender information. It may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.`],
-  [`Retention and removal`, `Records are kept only as long as needed for moderation, then deleted once you leave the server. You may ask an admin to remove your post or delete your stored data if needed.`],
-  [`Third parties`, `This bot runs on Discord and is subject to Discord's own Terms and Privacy Policy.`],
+  [`What we collect`, [
+    `The bot receives your submission text, your Discord user ID, and a timestamp.`,
+    `We do not collect your real name or contact details.`,
+  ]],
+  [`Anonymity`, [
+    `Confessions are posted without your name or profile picture.`,
+    `Avoid including identifying details if you want to stay anonymous.`,
+  ]],
+  [`How it's used`, [
+    `Your data is used only to deliver, review, and moderate submissions and to prevent abuse.`,
+    `It is never sold or shared with advertisers or third parties.`,
+  ]],
+  [`Who can see it`, [
+    `Only the developer and designated admins can access sender information.`,
+    `It may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.`,
+  ]],
+  [`Retention and removal`, [
+    `Records are kept only as long as needed for moderation, then deleted once you leave the server.`,
+    `You may ask an admin to remove your post or delete your stored data if needed.`,
+  ]],
+  [`Third parties`, [
+    `This bot runs on Discord and is subject to Discord's own Terms and Privacy Policy.`,
+  ]],
 ];
 
-/** All rules on one page: a heading per rule with its points quoted underneath, no blank lines. */
-const rulesPage = () =>
-  ['# RULES', ...RULES.map(([title, points], i) => [`### ${i + 1}. ${title}.`, ...points.map((p) => `> - ${p}`)].join('\n'))].join('\n');
-
-/** One numbered paragraph per item, blank line between: "1. **Short headline.** The explanation." */
+/** A numbered heading per item with its points quoted underneath, no blank lines. */
 const listPage = (heading, items) => () =>
-  [`# ${heading}`, '', items.map(([title, text], i) => `${i + 1}. **${title}.** ${text}`).join('\n\n')].join('\n');
+  [`# ${heading}`, ...items.map(([title, points], i) => [`### ${i + 1}. ${title}.`, ...points.map((p) => `> - ${p}`)].join('\n'))].join('\n');
 
 const BUILDERS = [
   overviewPage,
   howToPage,
-  rulesPage,
+  listPage('RULES', RULES),
   listPage('TERMS OF USE', TERMS),
   listPage('PRIVACY POLICY', PRIVACY),
 ];
 
-/** Navigation buttons: one per page, three to a row so the pages split over two rows (Discord allows five per row). */
+/** Navigation buttons, one per page, all in one row (Discord allows five per row). */
 function navRows(guildId, page) {
   const buttons = PAGES.map((label, i) =>
     new ButtonBuilder()
@@ -158,9 +189,7 @@ function navRows(guildId, page) {
       .setStyle(i === page ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(i === page),
   );
-  const rows = [];
-  for (let i = 0; i < buttons.length; i += 3) rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 3)));
-  return rows;
+  return [new ActionRowBuilder().addComponents(buttons)];
 }
 
 /** One page of the guide (overview, how to use, rules, terms of use, privacy policy) plus its buttons. */
