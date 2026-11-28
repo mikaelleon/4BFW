@@ -44,7 +44,7 @@ function build(guild, color, title, lines, appeal = false) {
     .setColor(color)
     .setTitle(title)
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `4BFW • ${formatDateTime()}` });
+    .setFooter({ text: `STFW • ${formatDateTime()}` });
   const rules = new ButtonBuilder().setCustomId(`${RULES_PREFIX}:${guild.id}`).setLabel('Read the rules').setStyle(ButtonStyle.Secondary);
   const row = new ActionRowBuilder().addComponents(rules);
   if (appeal) row.addComponents(new ButtonBuilder().setCustomId(`${APPEAL_FORM_PREFIX}:${guild.id}`).setLabel('Appeal').setStyle(ButtonStyle.Primary));

@@ -101,5 +101,5 @@ export function notice(title, description) {
     .setColor(COLOR)
     .setTitle(title)
     .setDescription(description)
-    .setFooter({ text: `4BFW • ${formatDateTime()}` });
+    .setFooter({ text: `STFW • ${formatDateTime()}` });
 }

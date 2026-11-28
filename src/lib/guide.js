@@ -9,24 +9,11 @@ export const GUIDE_PREFIX = 'guide';
 const PAGES = ['Overview', 'How to Use', 'Rules (P1)', 'Rules (P2)', 'Terms of Use', 'Privacy Policy'];
 export const RULES_PAGE = 2; // index of "Rules (P1)", where the "Read the rules" button in warning DMs lands
 
-function overviewPage({ cfg }) {
-  const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
+function overviewPage() {
   return [
-    '# OVERVIEW',
-    '',
-    'Got a take too spicy for the group chat? Post it here and let people argue with the idea, not with you.',
-    '',
-    '> **Completely anonymous**—no one’s gonna know it was you.',
-    '',
-    '4BFW is an anonymous confessions bot specifically for IT4B students. It lets you share thoughts, confessions, and shoutouts without revealing who you are.',
-    '',
-    '**Why does this exist?** Many students have something to say but hesitate to say it openly. The bot gives everyone a safe, simple space to speak up.',
-    '',
-    'Confessions, crushes, shoutouts, questions, and appreciation posts are all welcome. Honest feedback about student life on campus, including constructive criticism of professors, is also allowed within the guidelines.',
-    '',
-    '**What do we stand for?** The page supports freedom of expression with responsibility and respect. Every post goes through moderation to keep the space safe for everyone.',
-    '',
-    `**Where do posts appear?** Every submission is posted in ${where}.`,
+    '**STFW** · *noun* `/ˌɛs-ti-ɛf-ˈdʌbəl-ju/`',
+    '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
+    '*When you\'re told to STFU, let the wall do the talking instead.*',
   ].join('\n');
 }
 
@@ -140,7 +127,7 @@ export function guidePayload(guild, page = 0) {
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .setDescription(BUILDERS[index]({ guild, cfg }))
-    .setFooter({ text: `Page ${index + 1} of ${PAGES.length} • brought to you by 4BFW • ${formatDateTime()}` });
+    .setFooter({ text: `Page ${index + 1} of ${PAGES.length} • brought to you by STFW • ${formatDateTime()}` });
   return { embeds: [embed], components: navRows(guild.id, index) };
 }
 
@@ -162,9 +149,9 @@ export async function notifyOnline(guild) {
 
   const embed = new EmbedBuilder()
     .setColor(COLOR)
-    .setTitle('4BFW is back online')
+    .setTitle('STFW is back online')
     .setDescription(`Submissions are open again in <#${cfg.channel_id}>. Use \`/fw\` or DM me \`${prefix()} <message>\`.`)
-    .setFooter({ text: `4BFW • ${formatDateTime()}` });
+    .setFooter({ text: `STFW • ${formatDateTime()}` });
 
   const members = await guild.members.fetch();
   const targets = members.filter((m) => !m.user.bot && m.roles.cache.has(cfg.online_role_id));

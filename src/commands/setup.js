@@ -41,7 +41,7 @@ export default {
   manageOnly: true,
   data: new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('Configure the 4BFW bot (admin)')
+    .setDescription('Configure the STFW bot (admin)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
@@ -292,7 +292,7 @@ export default {
       db.updateGuild(guild.id, { mod_role_id: role.id });
       return interaction.editReply(
         `Members with **${role.name}** can now use the Warn / Delete / Ban buttons in the mod log and the \`/mod\` commands.\n` +
-          'If `/mod` does not show up for them, allow it for that role under Server Settings > Integrations > 4BFW.',
+          'If `/mod` does not show up for them, allow it for that role under Server Settings > Integrations > STFW.',
       );
     }
 

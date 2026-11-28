@@ -6,7 +6,7 @@ export default {
   admin: false,
   data: new SlashCommandBuilder()
     .setName('guide')
-    .setDescription('Show how to use the 4BFW bot')
+    .setDescription('Show how to use the STFW bot')
     .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .addStringOption((o) =>

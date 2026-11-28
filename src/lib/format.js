@@ -1,4 +1,4 @@
-// Shared look & feel for 4BFW embeds.
+// Shared look & feel for STFW embeds.
 
 export const COLOR = 0x242429;
 
