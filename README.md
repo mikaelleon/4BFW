@@ -24,7 +24,7 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ and a Postgres
 | `ID_HASH_SECRET` | no | Pins the hash key for bans and warnings. Set it once; never change it |
 | `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Daily encrypted database backups to a private channel; the newest 10 are kept. Both required. Images are left out as needed to fit the upload limit (never records); failures are posted in that channel. Restore with `npm run db:restore` |
 | `PORT` | no | HTTP keep-alive (default `3000`) |
-| `PUBLIC_URL` | no | Public address of the bot's HTTP server, which serves the web page: `/` (home), `/terms`, `/privacy` and `/faq`, text in `src/lib/legal.js`. The home page's invite button appears when `CLIENT_ID` is set. The guide links to `<PUBLIC_URL>/legal`, which opens the same page. Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
+| `PUBLIC_URL` | no | Public address of the bot's HTTP server, which serves the web page: `/` (home), `/terms`, `/privacy` and `/faq`, text in `src/lib/legal.js`. The home page's invite button appears when `CLIENT_ID` is set. The home page also shows the bot's status, 30 days of uptime (counted once a minute while connected to Discord) and the latest commits of `GITHUB_REPO`, read from `/status.json`. The guide links to `<PUBLIC_URL>/legal`, which opens the same page. Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
 
 ## Sending a submission
 

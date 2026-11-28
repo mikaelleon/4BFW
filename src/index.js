@@ -37,7 +37,7 @@ import {
 } from './lib/confession.js';
 import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } from './lib/owner-pin.js';
 import { prefix } from './lib/format.js';
-import { handleHttp, legalUrl } from './lib/legal.js';
+import { handleHttp, legalUrl, setStatusSource } from './lib/legal.js';
 import { withKeyLock } from './lib/locks.js';
 import { BUSY_MESSAGE, claimUpload, downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { holdsImages, keep } from './lib/held.js';
@@ -52,6 +52,7 @@ import { dmTagList, parseDmPost } from './lib/dm-syntax.js';
 import { REPORT_MODAL_PREFIX, handleReportButton, handleReportModal } from './lib/reports.js';
 import { startScheduler } from './lib/scheduler.js';
 import { startBackups } from './lib/backup.js';
+import { startUptime, uptimeStatus } from './lib/uptime.js';
 import { GUIDE_PREFIX, RULES_PAGE, dmGuide, guidePayload, notifyOnline } from './lib/guide.js';
 import {
   APPEAL_MODAL_PREFIX,
@@ -80,6 +81,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel, Partials.Message], // required to receive DMs
 });
+setStatusSource(() => uptimeStatus(client)); // the home page's status card
 
 const EPHEMERAL = MessageFlags.Ephemeral;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -93,6 +95,7 @@ setInterval(() => {
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`Logged in as ${c.user.tag}`);
+  startUptime(c);
   for (const cfg of await db.configuredGuilds()) {
     const guild = c.guilds.cache.get(cfg.guild_id);
     if (guild) await ensureSticky(guild).catch((err) => console.error(`Sticky check failed for ${guild.id}:`, err));

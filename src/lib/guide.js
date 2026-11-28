@@ -28,7 +28,7 @@ function overviewPage() {
     '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
     "*When you're told to STFU, let the wall do the talking instead.*",
     '',
-    'Many students have something to say but hesitate to say it openly, and this wall lets them say it without their name attached. Whether it is a confession or a shoutout, you are welcome to share it here. Honest feedback about campus life, including constructive criticism of professors, is also allowed as long as it follows the Rules.',
+    'Many people have something to say but hesitate to say it openly, and this wall lets them say it without their name attached. Whether it is a confession or a shoutout, you are welcome to share it here. Honest feedback about community life, including constructive criticism of people in positions of responsibility, is also allowed as long as it follows the Rules.',
     ...(links.length ? ['### Links', ...links.map((link) => `- ${link}`)] : []),
   ].join('\n');
 }
@@ -77,16 +77,16 @@ function howToItems({ cfg }) {
 // The server's official rules, as [title, points].
 const RULES = [
   [`Freedom of expression`, [
-    `Every student is free to share confessions, opinions, and experiences through this bot.`,
+    `Every member is free to share confessions, opinions, and experiences through this bot.`,
     `Speak honestly, but remember that *freedom of speech comes with responsibility.*`,
   ]],
   [`Welcome content`, [
     `Confessions, crushes, shoutouts, thoughts, questions, and appreciation posts are all *encouraged.*`,
-    `Honest feedback about student life on campus is also welcome.`,
+    `Honest feedback about community life is also welcome.`,
   ]],
   [`Respect for others`, [
     `Harassment, hate speech, bullying, threats, and discriminatory attacks are __not allowed.__`,
-    `This includes naming someone to shame or humiliate them, and it applies equally to students, faculty, administrators, and any other identifiable person.`,
+    `This includes naming someone to shame or humiliate them, and it applies equally to members, moderators, administrators, and any other identifiable person.`,
   ]],
   [`Safe content`, [
     `Explicit, illegal, or dangerous content is __not allowed.__`,
@@ -96,9 +96,9 @@ const RULES = [
     `Spam, advertisements, and repeated duplicate posts are __not allowed.__`,
     `Submit your confession *once.*`,
   ]],
-  [`Criticizing professors`, [
-    `Students may voice opinions, experiences, and concerns about teaching methods, grading, classroom management, academic requirements, and professional conduct.`,
-    `Constructive criticism and strongly worded negative feedback are allowed even when a faculty member is identified, as long as the post stays on *relevant academic or professional matters.*`,
+  [`Criticizing people in responsible roles`, [
+    `You may voice opinions, experiences, and concerns about how people in positions of responsibility carry out their roles.`,
+    `Constructive criticism and strongly worded negative feedback are allowed even when the person is identified, as long as the post stays on *matters relevant to that role.*`,
   ]],
   [`Serious allegations`, [
     `Serious claims must be presented *responsibly and truthfully.*`,
@@ -109,8 +109,8 @@ const RULES = [
     `Posts that violate these guidelines may be __deleted__, and their authors may be __warned or banned__ from posting without prior notice.`,
   ]],
   [`Responsibility and liability`, [
-    `Each user is *solely responsible* for what they submit, and opinions in posts belong to their authors, not the page, its admins, or the developer.`,
-    `The developer will not be liable for any conflict, dispute, or damage that arises from submitted content.`,
+    `Each user is *solely responsible* for what they submit, and opinions in posts belong to their authors, not the page, its admins, or EON Development.`,
+    `EON Development will not be liable for any conflict, dispute, or damage that arises from submitted content.`,
   ]],
   [`Acceptance of rules`, [
     `Submitting a confession means you have read and agreed to these guidelines.`,

@@ -156,7 +156,8 @@ const STYLE = String.raw`
     text-decoration: none; }
   .action:first-child { background: var(--fill); color: #fff; }
   code { padding: .1rem .35rem; border-radius: var(--r3); background: var(--inner); font-size: .875em; overflow-wrap: anywhere; }
-  .ui { font-weight: 600; white-space: nowrap; }
+  .ui, strong { font-weight: 600; }
+  .ui { white-space: nowrap; }
   .hint { display: none; margin: 0 0 8px; padding-inline: .75rem; color: var(--muted); font-size: .875rem; }
   .js .hint { display: block; }
 
@@ -207,6 +208,82 @@ const STYLE = String.raw`
   .js:not([data-page="home"]) header { padding-top: 1.5rem; padding-bottom: .5rem; }
   .js:not([data-page="home"]) h1 { width: 8rem; margin-bottom: 0; }
 
+  /* Live status on the home page: two cards in neutral colors, so the invite button stays the one standout. */
+  .live { display: none; gap: 16px; margin-bottom: 16px; }
+  .js .live { display: grid; grid-column: 1 / -1; }
+  @media (min-width: 56rem) { .js .live { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; } }
+  .live .card { padding: 20px; min-width: 0; }
+  .live h3 { padding: 0; }
+  .live p { margin: .5rem 0 0; }
+  .state { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
+  .state::before { content: ""; width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--muted); }
+  .state[data-state="online"]::before { background: var(--ink); box-shadow: none; }
+  .live small { display: block; color: var(--muted); font-size: .875rem; }
+  .days { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; height: 40px; margin-top: 16px; }
+  .days span { display: flex; align-items: flex-end; border-radius: 2px; background: var(--inner); }
+  .days span[data-empty] { background: none; box-shadow: inset 0 0 0 1px var(--track); }
+  .days i { width: 100%; border-radius: 2px; background: var(--muted); }
+  .ends { display: flex; justify-content: space-between; margin-top: .25rem; color: var(--muted); font-size: .75rem; }
+  /* The updates are a timeline: one line through every dot, a filled dot for the newest. --dot is the dot's center. */
+  .timeline { --dot: 19px; margin-top: .5rem; }
+  .timeline ol { margin: 0; padding: 0; list-style: none; }
+  .timeline li { position: relative; margin: 0; padding-left: 28px; }
+  .timeline li::before { content: ""; position: absolute; z-index: 1; left: 1px; top: calc(var(--dot) - 6px); width: 12px; height: 12px;
+    border-radius: 50%; background: var(--card); box-shadow: inset 0 0 0 2px var(--muted); }
+  .timeline > ol:first-child > li:first-child::before { background: var(--ink); box-shadow: none; }
+  .timeline li::after, .timeline summary::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px;
+    background: var(--track); }
+  .timeline > ol:first-child > li:first-child::after { top: var(--dot); }
+  /* The line ends at the oldest dot shown. A closed "more" row keeps half a line, to say the history goes on. */
+  .timeline details li:last-child::after, .timeline:has(details[hidden]) > ol > li:last-child::after { bottom: auto; height: var(--dot); }
+  .timeline details[hidden] li::after { display: none; }
+  .timeline details:not([open]) summary::before { bottom: 50%; }
+  .timeline li a { display: block; padding-block: .5rem; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+  .timeline li a span { display: block; }
+  .timeline li a:hover span { text-decoration: underline; text-underline-offset: 3px; }
+  .timeline summary { position: relative; padding-left: 28px; }
+  .live summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--accent); }
+  .live .all { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; color: var(--accent); text-underline-offset: 3px; }
+
+  /* Icons beside headings and in controls. */
+  .icon.lead { width: 20px; height: 20px; color: var(--accent); }
+  .live h3 { display: flex; align-items: center; align-self: stretch; gap: .5rem; }
+  .updates { display: flex; flex-direction: column; }
+  .updates .all { margin-top: auto; align-self: flex-start; }
+  span.num .icon { width: 20px; height: 20px; }
+  span.num { pointer-events: none; }
+  span.num::before, span.num::after { content: none; }
+  /* Home cards line their action up along the bottom. */
+  #home article { grid-template-rows: auto 1fr auto; }
+  .do { grid-column: 1 / -1; justify-self: start; display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+    min-width: 10rem; min-height: 44px; margin: 0 0 4px 4px; padding-inline: 16px; border-radius: var(--r2); background: var(--inner);
+    color: var(--accent); font-size: .875rem; line-height: 1.4; }
+  .swap { display: grid; }
+  .swap .icon { grid-area: 1 / 1; }
+  .swap .done { opacity: 0; scale: .3; }
+  .do[data-done] .swap .done { opacity: 1; scale: 1; }
+  .do[data-done] .swap .idle { opacity: 0; scale: .3; }
+  .column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .try { display: flex; flex: 1; flex-direction: column; }
+  .try > label[for] { margin-top: .75rem; font-size: .875rem; color: var(--muted); }
+  .try textarea { width: 100%; min-height: 5.5rem; margin-top: .25rem; padding: .75rem; border: 0; border-radius: var(--r2);
+    background: var(--bg); box-shadow: 0 0 0 1px var(--ring); color: var(--ink); font: inherit; resize: vertical; }
+  .try textarea::placeholder { color: var(--muted); }
+  .try .toggle { justify-content: flex-start; align-self: flex-start; padding: 0; font-size: .875rem; }
+  .try .post { flex: 1; margin: 0; }
+  .try .post .words { min-height: 3rem; margin-top: .25rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .try .post .words[data-empty] { color: var(--muted); }
+  .try .post.veiled .words { filter: blur(6px); user-select: none; }
+  .reveal { min-height: 44px; color: var(--accent); font-size: .875rem; }
+  .try small { margin-top: .75rem; }
+  .again { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; margin-top: .5rem; color: var(--accent); }
+  .days { cursor: crosshair; touch-action: pan-y; border-radius: var(--r3); }
+  .days span.on { box-shadow: 0 0 0 2px var(--ink); }
+  .readout { min-height: 1.5rem; font-size: .875rem; font-variant-numeric: tabular-nums; }
+  .live summary { gap: .5rem; list-style: none; }
+  .live summary::-webkit-details-marker { display: none; }
+  .live details[open] summary .icon { rotate: 180deg; }
+
   footer { padding-bottom: 3rem; }
   footer p { margin: 0; padding: .25rem .75rem .75rem; color: var(--muted); font-size: .875rem; }
   footer ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -227,6 +304,12 @@ const STYLE = String.raw`
   .ready:not(.keys) .expander { transition: grid-template-rows var(--t-close) var(--ease-in-out); }
   .ready:not(.keys) .toc.shown .expander { transition-duration: var(--t-open); }
   .ready:not(.keys) .toc summary .icon { transition: rotate var(--t-move) var(--ease-in-out); }
+  .ready:not(.keys) :is(.do, .again, .reveal) { transition: scale var(--t-press) var(--ease-out), background-color var(--t-press) ease; }
+  .ready:not(.keys) .swap .icon { transition: opacity var(--t-press) var(--ease-out), scale var(--t-press) var(--ease-out); }
+  .ready:not(.keys) .live summary .icon { transition: rotate var(--t-move) var(--ease-in-out); }
+  .ready:not(.keys) .try .post .words { transition: filter var(--t-move) ease; }
+  :is(.do, .again):active { scale: .96; }
+  @media (hover: hover) and (pointer: fine) { :is(.do, .again, .reveal):hover { box-shadow: inset 0 0 0 1px var(--accent); } }
   .ready:not(.keys) .num::after { transition: opacity var(--t-note-out) var(--ease-in), scale var(--t-note-out) var(--ease-in); }
   .ready:not(.keys) .num[data-show]::after { transition: opacity var(--t-note-in) var(--ease-out), scale var(--t-note-in) var(--ease-out); }
   @media (hover: hover) and (pointer: fine) {
@@ -297,6 +380,7 @@ const SCRIPT = String.raw`
   var search = $('#search'), examples = $('#examples'), theme = $('#theme');
   var current = docs[0].id, picked = null;
   var contents = $('.toc details'), wide = matchMedia('(min-width: 56rem)');
+  var live = $('#live'), asked = 0, pickedDay = 29;
 
   function save(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
   function saved(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
@@ -358,6 +442,7 @@ const SCRIPT = String.raw`
     examples.parentElement.hidden = !$('aside', doc);
     $('.updated').hidden = !doc.hasAttribute('data-dated');
     filter();
+    refresh();
   }
 
   function isDoc(id) { return docs.some(function (d) { return d.id === id; }); }
@@ -490,6 +575,148 @@ const SCRIPT = String.raw`
     $$('.toc a').forEach(function (l) { l.setAttribute('aria-current', !!active && l.hash === '#' + active.id); });
   }
 
+  // Live status: read when the home page is open, then once a minute while it stays in view.
+  function day(date) { return date.toLocaleDateString('en', { month: 'short', day: 'numeric' }); }
+  function percent(n) { return (n >= 99.95 ? '100' : n.toFixed(1)) + '%'; }
+  function put(name, text) { $('[data-live="' + name + '"]', live).textContent = text; }
+  function showBot(bot) {
+    $('.again', live).hidden = !!bot;
+    var state = !bot ? 'unknown' : bot.online ? 'online' : 'offline';
+    var words = { online: 'Online', offline: 'Offline', unknown: 'Status unavailable' }[state];
+    $('.state', live).dataset.state = state;
+    // Written only on a change, so screen readers are not told the same status every minute.
+    if ($('[data-live="state"]', live).textContent !== words) put('state', words);
+    var started = bot && bot.online && bot.startedAt ? new Date(bot.startedAt) : null;
+    put('since', started ? 'Running since ' + day(started) + ', ' + started.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' }) : '');
+    var known = bot ? bot.days.filter(function (d) { return d.percent !== null; }).length : 0;
+    put('uptime', !bot ? 'The bot’s status cannot be read right now.' : !known ? 'No uptime history yet'
+      : percent(bot.percent) + ' uptime ' + (known === 1 ? 'today' : 'over the last ' + known + ' days'));
+    var chart = $('.days', live);
+    chart.textContent = '';
+    (bot ? bot.days : []).forEach(function (d) {
+      var p = d.date.split('-'), cell = document.createElement('span');
+      cell.dataset.text = day(new Date(p[0], p[1] - 1, p[2])) + ': ' + (d.percent === null ? 'no data' : percent(d.percent) + ' uptime');
+      if (d.percent === null) cell.setAttribute('data-empty', '');
+      else {
+        var bar = document.createElement('i');
+        bar.style.height = d.percent + '%';
+        cell.appendChild(bar);
+      }
+      chart.appendChild(cell);
+    });
+    if (bot) readDay(pickedDay);
+    $('.history', live).hidden = !bot;
+  }
+  function showUpdates(updates) {
+    var have = !!(updates && updates.length);
+    put('updates', have ? '' : $$('li', live).length ? 'Could not refresh, so this is the last list loaded.' : 'Updates cannot be loaded right now.');
+    $('[data-live="updates"]', live).hidden = have;
+    if (!have) return; // keeps a list that loaded earlier
+    var lists = $$('ol', live);
+    lists.forEach(function (list) { list.textContent = ''; });
+    updates.forEach(function (u, i) {
+      var item = document.createElement('li'), a = document.createElement('a'), when = document.createElement('small'),
+        title = document.createElement('span');
+      a.href = u.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      when.textContent = day(new Date(u.date));
+      title.textContent = u.title;
+      a.append(when, title);
+      item.appendChild(a);
+      lists[i < 3 ? 0 : 1].appendChild(item);
+    });
+    var more = $('details', live), rest = updates.length - 3;
+    more.hidden = rest <= 0;
+    if (!more.dataset.set) { more.open = wide.matches; more.dataset.set = '1'; } // once: the reader's choice wins after that
+    $('summary span', more).textContent = 'Show ' + rest + (rest === 1 ? ' more update' : ' more updates');
+  }
+  function refresh() {
+    if (!live || current !== docs[0].id || document.hidden || Date.now() - asked < 55000) return;
+    asked = Date.now();
+    fetch(live.dataset.url, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (s) { showBot(s.bot); showUpdates(s.updates); })
+      .catch(function () { showBot(null); showUpdates(null); });
+  }
+  setInterval(refresh, 60000);
+  document.addEventListener('visibilitychange', refresh);
+
+  // Cards on the home page: copy a command, or jump to the preview.
+  $$('.do[data-copy]').forEach(function (b) {
+    var label = $('span.text', b), idle = label.textContent, timer;
+    b.addEventListener('click', function () {
+      var done = function (note, ok) {
+        clearTimeout(timer);
+        label.textContent = note;
+        if (ok) b.dataset.done = '';
+        $('#said').textContent = note;
+        timer = setTimeout(function () { label.textContent = idle; delete b.dataset.done; }, 1800);
+      };
+      if (!navigator.clipboard) return done('Copy failed', false);
+      navigator.clipboard.writeText(b.dataset.copy).then(function () { done('Copied', true); }, function () { done('Copy failed', false); });
+    });
+  });
+  var draft = $('#draft');
+  $$('.do[data-try]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      draft.scrollIntoView({ block: 'center', behavior: still.matches || root.classList.contains('keys') ? 'auto' : 'smooth' });
+      draft.focus({ preventScroll: true });
+    });
+  });
+
+  // The preview: what is typed shows as a post. It stays in this tab.
+  if (draft) {
+    var warn = $('#warn'), shown = false, words = $('.try .words'), reveal = $('.reveal'), blank = words.textContent;
+    var preview = function () {
+      var typed = draft.value.trim(), veiled = warn.checked && !shown && !!typed;
+      words.textContent = typed ? draft.value : blank;
+      words.toggleAttribute('data-empty', !typed);
+      words.setAttribute('aria-hidden', veiled);
+      words.parentElement.classList.toggle('veiled', veiled);
+      $('.try .warning').hidden = !warn.checked;
+      reveal.hidden = !warn.checked || !typed;
+      reveal.textContent = shown ? 'Hide text' : 'Show hidden text';
+    };
+    draft.addEventListener('input', preview);
+    warn.addEventListener('change', function () { shown = false; preview(); });
+    reveal.addEventListener('click', function () { shown = !shown; preview(); });
+    preview();
+  }
+
+  // Uptime chart: point at a day, or use the arrow keys, to read it.
+  function readDay(i) {
+    var cells = $$('.days span', live);
+    if (!cells.length) return;
+    pickedDay = Math.max(0, Math.min(cells.length - 1, i));
+    cells.forEach(function (c, j) { c.classList.toggle('on', j === pickedDay); });
+    var text = cells[pickedDay].dataset.text;
+    put('day', text);
+    var chart = $('.days', live);
+    chart.setAttribute('aria-valuenow', pickedDay + 1);
+    chart.setAttribute('aria-valuetext', text);
+  }
+  if (live) {
+    var chart = $('.days', live);
+    var point = function (e) {
+      var box = chart.getBoundingClientRect();
+      readDay(Math.floor((e.clientX - box.left) / box.width * 30));
+    };
+    chart.addEventListener('pointerdown', point);
+    chart.addEventListener('pointermove', point);
+    chart.addEventListener('keydown', function (e) {
+      var to = { ArrowLeft: pickedDay - 1, ArrowRight: pickedDay + 1, Home: 0, End: 29 }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      readDay(to);
+    });
+    $('.again', live).addEventListener('click', function () {
+      put('state', 'Checking…');
+      asked = 0;
+      refresh();
+    });
+  }
+
   tabs.forEach(function (tab, i) {
     tab.addEventListener('click', function () { go(tab.dataset.doc); });
     tab.addEventListener('keydown', function (e) {
@@ -528,7 +755,7 @@ const SCRIPT = String.raw`
   });
 
   // Clicking a section number copies a link to that section.
-  $$('.num').forEach(function (n) {
+  $$('a.num').forEach(function (n) {
     n.addEventListener('click', function (e) {
       e.preventDefault();
       history.replaceState(null, '', n.hash);
@@ -635,6 +862,19 @@ const icon = (name, shapes) => `<svg class="icon ${name}" viewBox="0 0 24 24" ar
 const SUN = icon('sun', '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2M20 12h2m-13.66 5.66-1.41 1.41M19.07 4.93l-1.41 1.41"/>');
 const MOON = icon('moon', '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>');
 const CHEVRON = icon('chevron-down', '<path d="m6 9 6 6 6-6"/>');
+const LUCIDE = {
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+  pointer: '<path d="M14 4.1 12 6M5.1 8l-2.9-.8M6 12l-1.9 2M7.2 2.2 8 5.1"/><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"/>',
+  message: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  commit: '<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+};
+const lucide = (name, extra = name) => icon(extra, LUCIDE[name]);
 const EXTERNAL = icon('external-link', '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>');
 const ARROW = icon('arrow-up-right', '<path d="M7 7h10v10M7 17 17 7"/>');
 
@@ -648,16 +888,19 @@ const link = (label, url, name) =>
     : external(label, url, name);
 
 const article = (docId, section, n) => {
-  const { title, body, points, example, links = [] } = section;
-  const marked = (s) => escapeHtml(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b class="ui">$1</b>');
+  const { title, body, points, after, example, links = [], icon: mark, copy, tryIt } = section;
+  const marked = (s) => escapeHtml(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b class="ui">$1</b>').replace(/__([^_]+)__/g, '<strong>$1</strong>');
   const text = (s) => links.reduce((out, [phrase, url]) => out.replace(escapeHtml(phrase), () => link(escapeHtml(phrase), url)), marked(s));
   return [
     `<article id="${docId}-${n}">`,
-    `<a class="num" href="#${docId}-${n}" title="Copy link to this section">${n}</a>`,
+    mark ? `<span class="num">${lucide(mark)}</span>` : `<a class="num" href="#${docId}-${n}" title="Copy link to this section">${n}</a>`,
     `<h3>${escapeHtml(title)}</h3>`,
-    body ? `<p>${text(body)}</p>` : '',
+    ...[body ?? []].flat().map((p) => `<p>${text(p)}</p>`),
     points ? `<ul>${points.map((p) => `<li>${text(p)}</li>`).join('')}</ul>` : '',
+    ...(after ?? []).map((p) => `<p>${text(p)}</p>`),
     example ? `<aside><span class="sr">Example: </span>${escapeHtml(example)}</aside>` : '',
+    copy ? `<button type="button" class="do" data-copy="${escapeHtml(copy)}"><span class="swap">${lucide('copy', 'idle')}${lucide('check', 'done')}</span><span class="text">Copy ${escapeHtml(copy.trim())}</span></button>` : '',
+    tryIt ? `<button type="button" class="do" data-try>${lucide('pen')}${escapeHtml(tryIt)}</button>` : '',
     '</article>',
   ].join('\n');
 };
@@ -681,19 +924,53 @@ const samplePost = ({ title, text }) => `<figure class="post sample">
 <p class="by">Sent by <span>Hidden</span></p>
 </figure>`;
 
-// "Terms of Use" -> "Terms<span> of Use</span>", so narrow screens can show the first word only.
-const tabName = (name) => {
+const liveStatus = ({ url, history }) => `<div class="live" id="live" data-url="${escapeHtml(url)}">
+<div class="column">
+<section class="card">
+<h3>${lucide('activity', 'lead')}Bot status</h3>
+<p class="state" role="status"><span data-live="state">Checking…</span></p>
+<small data-live="since"></small>
+<p data-live="uptime"></p>
+<div class="history" hidden><div class="days" role="slider" tabindex="0" aria-label="Uptime by day" aria-valuemin="1" aria-valuemax="30"></div><div class="ends" aria-hidden="true"><span>30 days ago</span><span>Today</span></div><p class="readout" data-live="day"></p></div>
+<button type="button" class="again" hidden>${lucide('refresh')}Check again</button>
+</section>
+<section class="card try">
+<h3>${lucide('pen', 'lead')}Try a post</h3>
+<label for="draft">Your message</label>
+<textarea id="draft" rows="3" maxlength="500" placeholder="Type something to see how it looks…"></textarea>
+<label class="toggle">Content warning <input type="checkbox" role="switch" id="warn"></label>
+<div class="post"><p><b>Anonymous #013</b> <small class="warning" hidden>Content warning</small></p><p class="words">Your words will appear here.</p><button type="button" class="reveal" hidden></button><p class="by">Sent by <span>Hidden</span></p></div>
+<small>This preview stays in your browser. Nothing is sent or saved.</small>
+</section>
+</div>
+<section class="card updates">
+<h3>${lucide('commit', 'lead')}Latest updates</h3>
+<p data-live="updates">Loading…</p>
+<div class="timeline">
+<ol></ol>
+<details hidden><summary><span></span>${CHEVRON}</summary><ol></ol></details>
+</div>
+<a class="all" href="${escapeHtml(history)}" target="_blank" rel="noopener noreferrer">All updates on GitHub${EXTERNAL}</a>
+</section>
+</div>`;
+
+// "Terms of Use" -> "Terms<span> of Use</span>", so narrow screens can show the first word only. A document with a
+// `short` name (the end of its full name) shows that instead: "<span>General </span>FAQs".
+const tabName = ({ name, short }) => {
+  if (short) return `<span class="long">${name.slice(0, -short.length)}</span>${short}`;
   const [first, ...rest] = name.split(' ');
   return rest.length ? `${first}<span class="long"> ${rest.join(' ')}</span>` : first;
 };
 
 /**
- * The whole page. `docs` is [{ id, name, who?, dated?, sections: [{ title, body?, points?, example?, links? }] }];
+ * Home sections may add `icon` (replaces the number), `copy` (a command to copy) and `tryIt` (a button to the preview).
+ * The whole page. `docs` is [{ id, name, short?, who?, dated?, sections: [{ title, body? (text, or a list of paragraphs), points?, after? (paragraphs under the points), example?, links? }] }];
  * ids hold no "-". The first document is the home page; `dated` shows the "Last updated" line on that document, and
  * `who.after` is the section number the "Who sees what" card follows. `actions` are the home page's buttons, as [label, url], and
- * `sample` is the { title, text } of the post shown there.
+ * `sample` is the { title, text } of the post shown there. `live` is { url, history }: where the home page reads its status
+ * and updates, and the page listing every update.
  */
-export function renderLegalPage({ updated, docs, actions = [], sample, related = [] }) {
+export function renderLegalPage({ updated, docs, actions = [], sample, related = [], live }) {
   const names = new Intl.ListFormat('en').format(docs.map((d) => d.name));
   return `<!doctype html>
 <html lang="en">
@@ -709,7 +986,7 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
 <body>
 <div class="bar"><div class="wrap"><div class="tools card">
   <div class="tabs" role="tablist" aria-label="Document" style="--n: ${docs.length}">
-    ${docs.map((d) => `<button type="button" role="tab" data-doc="${d.id}" aria-controls="${d.id}" aria-label="${d.name}">${tabName(d.name)}</button>`).join('')}
+    ${docs.map((d) => `<button type="button" role="tab" data-doc="${d.id}" aria-controls="${d.id}" aria-label="${d.name}">${tabName(d)}</button>`).join('')}
   </div>
   <input type="search" id="search" placeholder="Search…" enterkeyhint="search" autocomplete="off" aria-label="Search this document">
   <label class="toggle">Examples <input type="checkbox" role="switch" id="examples"></label>
@@ -725,7 +1002,7 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
   </a></h1>
   <p class="say"><i>noun</i> /ˌɛs-ti-ɛf-ˈdʌbəl-ju/</p>
   <p class="sense"><b>S</b>erver <b>T</b>houghts <b>F</b>reedom <b>W</b>all; an anonymous outlet for unfiltered thoughts and confessions.</p>
-  <div class="cta">${actions.map(([label, url]) => link(escapeHtml(label) + (url.startsWith('/') ? '' : EXTERNAL), url, 'action')).join('')}</div>
+  <div class="cta">${actions.map(([label, url]) => link((url.startsWith('/') ? lucide('book') : '') + escapeHtml(label) + (url.startsWith('/') ? '' : EXTERNAL), url, 'action')).join('')}</div>
   <p class="updated">Last updated ${updated}</p>
   </div>
   ${sample ? samplePost(sample) : ''}
@@ -743,6 +1020,7 @@ export function renderLegalPage({ updated, docs, actions = [], sample, related =
 <h2>${d.name}</h2>
 ${at ? '<p class="hint">Select a section number to copy its link.</p>' : ''}
 ${d.sections.map((s, i) => article(d.id, s, i + 1) + (d.who && d.who.after === i + 1 ? whoSeesWhat(d.who) : '')).join('\n')}
+${live && !at ? liveStatus(live) : ''}
 <p class="empty" role="status" hidden>No section here matches your search</p>
 <div class="elsewhere"></div>
 </section>`,

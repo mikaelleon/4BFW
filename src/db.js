@@ -219,6 +219,14 @@ export async function countPending(guildId) {
   return (await get("SELECT COUNT(*) AS n FROM confessions WHERE guild_id = ? AND status = 'pending'", guildId)).n;
 }
 
+export async function getMeta(key) {
+  return (await get('SELECT value FROM meta WHERE key = ?', key))?.value ?? null;
+}
+
+export async function setMeta(key, value) {
+  await run('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
+}
+
 /** False when the ID hash secret differs from the one the stored keys were made with. */
 export async function secretMatches() {
   const stored = (await get("SELECT value FROM meta WHERE key = 'idkey_fp'"))?.value;
