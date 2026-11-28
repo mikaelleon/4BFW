@@ -23,6 +23,7 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 | `ID_HASH_SECRET` | no | Pins the hash key for bans and warnings. Set it once; never change it |
 | `BACKUP_CHANNEL_ID`, `BACKUP_PASSPHRASE` | no | Encrypted DB backups to a private channel, shortly after changes. Both required. If the database outgrows the upload limit, images are left out of the backup (never records); failures are posted in that channel |
 | `PORT` | no | HTTP keep-alive (default `3000`) |
+| `PUBLIC_URL` | no | Public address of the bot's HTTP server. The guide links to `<PUBLIC_URL>/legal` (Terms of Use and Privacy Policy, text in `src/lib/legal.js`). Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
 
 ## Sending a submission
 

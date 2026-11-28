@@ -1,16 +1,29 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import * as db from '../db.js';
 import { COLOR, formatDateTime, prefix } from './format.js';
+import { legalUrl } from './legal.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const running = new Set();
 
 export const GUIDE_PREFIX = 'guide';
-const PAGES = ['Overview', 'How to Use', 'Rules', 'Terms of Use', 'Privacy Policy'];
+const PAGES = ['Overview', 'How to Use', 'Rules'];
 export const RULES_PAGE = 2; // index of "Rules", where the "Read the rules" button in warning DMs lands
+
+/** A "###" heading with its points quoted underneath. Shared by every list in the guide. */
+const block = (title, points) => [`### ${title}`, ...points.map((p) => `> - ${p}`)].join('\n');
 
 function overviewPage({ cfg }) {
   const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
+  const minutes = cfg?.self_delete_minutes ?? 10;
+  const url = legalUrl();
+  const faqs = [
+    ['Is it really anonymous?', 'Your name and picture never show on a post. The bot does record the sender: the server owner can look it up with a PIN, and whoever runs the bot can access its data.'],
+    ['What can I post?', 'Confessions, crushes, shoutouts, questions, appreciation, and honest feedback about student life, within the Rules.'],
+    ['Where do posts appear?', `In ${where}, unless the server sends a topic to its own channel.`],
+    ['Are posts moderated?', cfg?.approval_mode ? 'Yes. A moderator approves each post before it goes up.' : 'Yes. Moderators can remove posts, and rule-breakers may be warned or banned.'],
+    ['Can I delete my post?', minutes > 0 ? `Within ${minutes} minute${minutes === 1 ? '' : 's'}: right-click it > Apps > **Delete my submission**.` : 'Ask a moderator.'],
+  ];
   return [
     '# OVERVIEW',
     '',
@@ -18,57 +31,51 @@ function overviewPage({ cfg }) {
     '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
     "*When you're told to STFU, let the wall do the talking instead.*",
     '',
-    '**Why does this exist?** Many students have something to say but hesitate to say it openly. The bot gives everyone a safe, simple space to speak up.',
-    '',
-    'Confessions, crushes, shoutouts, questions, and appreciation posts are all welcome. Honest feedback about student life on campus, including constructive criticism of professors, is also allowed within the guidelines.',
-    '',
-    '**What do we stand for?** The page supports freedom of expression with responsibility and respect. Every post goes through moderation to keep the space safe for everyone.',
-    '',
-    `**Where do posts appear?** Every submission is posted in ${where}.`,
+    '## FAQs',
+    ...faqs.map(([question, answer]) => `### ${question}\n> ${answer}`),
+    ...(url ? ['', `By posting, you agree to the [Terms of Use](${url}#terms) and [Privacy Policy](${url}#privacy).`] : []),
   ].join('\n');
 }
 
 function howToPage({ cfg }) {
   const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
   const p = prefix();
-  // The heading sits inside the quote block so there is no gap between it and its list.
-  return [
-    '# HOW TO USE IT',
-    '',
-    '> **1. Slash command:**',
-    '> - Type `/fw` in any channel of the server, or in the bot’s DMs.',
-    '> - Fill in the message field. Optional: `topic`, `image`, or `poll` (`yes/no`, or options split by `|`). Only you will see the reply.',
-    '',
-    '> **2. Button:**',
-    `> - Press **Write a Submission** at the bottom of ${where}.`,
-    '> - Type your post in the pop-up. Optional: pick a topic, upload an image, or write poll options (`yes/no`, or one per line).',
-    '',
-    '> **3. Direct message:**',
-    `> - DM the bot with \`${p} <your message>\`.`,
-    '> - You can attach an image to include it in your post.',
-    `> - Add a topic with \`${p} #memes <message>\`, a content warning with \`${p} cw: label | <message>\`, or a poll with \`${p} poll: Question? | A | B\` (leave out the options for yes/no).`,
-    `> - \`${p} notify off\` stops reply DMs. \`${p} preview on\` shows your post and asks before it goes up.`,
-    '> - If you share more than one server with the bot, it will ask which one to post to.',
-    '> - Pick the right server before confirming.',
-    '',
-    '> **4. Replying with the button:**',
-    '> - Press Reply under any post to respond to it.',
-    '> - Or type its number, like `#012`, and it turns into a link',
-    '> - The author gets a DM to notify that someone replied to their post',
-    '> - With reply threads, you keep one alias (like Anon 2) inside a thread, so your replies there can be told apart from others’',
-    '> - Replying to your own post, you can choose to show as **OP**. It is off unless you pick it',
-    '> - If posting is paused, you may be asked whether to **Post later**. Nothing is saved unless you agree',
-    '',
-    '> **5. Reacting and voting:**',
-    '> - Tap 👍 👎 under a post. One reaction each, tap again to take it back.',
-    '> - On a poll, tap ✅ ❌ or a number to vote. Votes are anonymous.',
-    '> - A poll closes at its end time, or when its author presses Close poll. Results are posted under it.',
-    '> - Posts that collect enough likes may be featured in a special channel.',
-    '',
-    '> **6. Reporting:**',
-    '> - Press Report under a post that breaks the rules. Reports are anonymous.',
-    '> - Enough reports hide the post until a moderator reviews it.',
-  ].join('\n');
+  const ways = [
+    ['Slash command', [
+      'Type `/fw` in any channel of the server, or in the bot’s DMs.',
+      'Fill in the message field. Optional: `topic`, `image`, or `poll` (`yes/no`, or options split by `|`).',
+      'Only you will see the reply.',
+    ]],
+    ['Button', [
+      `Press **Write a Submission** at the bottom of ${where}.`,
+      'Type your post in the pop-up. Optional: pick a topic, upload an image, or write poll options (`yes/no`, or one per line).',
+    ]],
+    ['Direct message', [
+      `DM the bot with \`${p} <your message>\`.`,
+      'You can attach an image to include it in your post.',
+      `Add a topic with \`${p} #memes <message>\`, a content warning with \`${p} cw: label | <message>\`, or a poll with \`${p} poll: Question? | A | B\` (leave out the options for yes/no).`,
+      `\`${p} notify off\` stops reply DMs. \`${p} preview on\` shows your post and asks before it goes up.`,
+      'If you share more than one server with the bot, it will ask which one to post to. Pick the right server before confirming.',
+    ]],
+    ['Replying', [
+      'Press Reply under any post, or type its number, like `#012`, and it turns into a link.',
+      'The author gets a DM saying someone replied to their post.',
+      'With reply threads, you keep one alias (like Anon 2) inside a thread, so your replies there can be told apart from others’.',
+      'Replying to your own post, you can choose to show as **OP**. It is off unless you pick it.',
+      'If posting is paused, you may be asked whether to **Post later**. Nothing is saved unless you agree.',
+    ]],
+    ['Reacting and voting', [
+      'Tap 👍 👎 under a post. One reaction each, tap again to take it back.',
+      'On a poll, tap ✅ ❌ or a number to vote. Votes are anonymous.',
+      'A poll closes at its end time, or when its author presses Close poll. Results are posted under it.',
+      'Posts that collect enough likes may be featured in a special channel.',
+    ]],
+    ['Reporting', [
+      'Press Report under a post that breaks the rules. Reports are anonymous.',
+      'Enough reports hide the post until a moderator reviews it.',
+    ]],
+  ];
+  return ['# HOW TO USE IT', ...ways.map(([title, points], i) => block(`${i + 1}. ${title}.`, points))].join('\n');
 }
 
 // The server's official rules, as [title, points].
@@ -115,70 +122,9 @@ const RULES = [
   ]],
 ];
 
-const TERMS = [
-  [`Acceptance`, [
-    `By using this bot, you agree to these terms and the Posting Guidelines.`,
-    `If you disagree, please do not submit anything.`,
-  ]],
-  [`Your submissions`, [
-    `You are solely responsible for what you post.`,
-    `Only submit content you are willing to stand behind.`,
-  ]],
-  [`Prohibited use`, [
-    `Do not use the bot to harass, threaten, impersonate, or expose anyone.`,
-    `Spam and attempts to abuse the bot are also not allowed.`,
-  ]],
-  [`Moderation`, [
-    `Admins may review or remove any submission at their discretion.`,
-    `Repeat violators may be warned or banned from posting without notice.`,
-  ]],
-  [`No guarantees`, [
-    `The bot is provided "as is," and posts may be delayed or lost due to technical issues.`,
-    `Opinions in confessions belong to their authors, not the developer or the page.`,
-  ]],
-  [`Limitation of liability`, [
-    `The developer is not liable for any conflict, dispute, or harm arising from submitted content or use of the bot.`,
-    `Continued use means you accept these terms, which may be updated at any time.`,
-  ]],
-];
+const rulesPage = () => ['# RULES', ...RULES.map(([title, points], i) => block(`${i + 1}. ${title}.`, points))].join('\n');
 
-const PRIVACY = [
-  [`What we collect`, [
-    `The bot receives your submission text, your Discord user ID, and a timestamp.`,
-    `We do not collect your real name or contact details.`,
-  ]],
-  [`Anonymity`, [
-    `Confessions are posted without your name or profile picture.`,
-    `Avoid including identifying details if you want to stay anonymous.`,
-  ]],
-  [`How it's used`, [
-    `Your data is used only to deliver, review, and moderate submissions and to prevent abuse.`,
-    `It is never sold or shared with advertisers or third parties.`,
-  ]],
-  [`Who can see it`, [
-    `Only the developer and designated admins can access sender information.`,
-    `It may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.`,
-  ]],
-  [`Retention and removal`, [
-    `Records are kept only as long as needed for moderation, then deleted once you leave the server.`,
-    `You may ask an admin to remove your post or delete your stored data if needed.`,
-  ]],
-  [`Third parties`, [
-    `This bot runs on Discord and is subject to Discord's own Terms and Privacy Policy.`,
-  ]],
-];
-
-/** A numbered heading per item with its points quoted underneath, no blank lines. */
-const listPage = (heading, items) => () =>
-  [`# ${heading}`, ...items.map(([title, points], i) => [`### ${i + 1}. ${title}.`, ...points.map((p) => `> - ${p}`)].join('\n'))].join('\n');
-
-const BUILDERS = [
-  overviewPage,
-  howToPage,
-  listPage('RULES', RULES),
-  listPage('TERMS OF USE', TERMS),
-  listPage('PRIVACY POLICY', PRIVACY),
-];
+const BUILDERS = [overviewPage, howToPage, rulesPage];
 
 /** Navigation buttons, one per page, all in one row (Discord allows five per row). */
 function navRows(guildId, page) {
@@ -192,7 +138,7 @@ function navRows(guildId, page) {
   return [new ActionRowBuilder().addComponents(buttons)];
 }
 
-/** One page of the guide (overview, how to use, rules, terms of use, privacy policy) plus its buttons. */
+/** One page of the guide (overview, how to use, rules) plus its buttons. */
 export function guidePayload(guild, page = 0) {
   const index = Number.isInteger(page) && page >= 0 && page < PAGES.length ? page : 0;
   const cfg = db.getGuild(guild.id);

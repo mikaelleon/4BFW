@@ -38,6 +38,7 @@ import {
 } from './lib/confession.js';
 import { PIN_DISMISS_ID, PIN_MODAL_PREFIX, handlePinDismiss, handlePinModal } from './lib/owner-pin.js';
 import { prefix } from './lib/format.js';
+import { handleHttp, legalUrl } from './lib/legal.js';
 import { BUSY_MESSAGE, claimUpload, downloadImage, imageHelp, pickImage, prepareImage, uploadLimit } from './lib/image.js';
 import { holdsImages, keep } from './lib/held.js';
 import { closedNotice } from './lib/hours.js';
@@ -65,10 +66,9 @@ import { BAN_APPEAL_PREFIX, appealUsage, bannedGuildsOf, handleBanAppealButton, 
 import { APPEAL_FORM_PREFIX, RULES_PREFIX } from './lib/notices.js';
 import { CLEARWARN_PREFIX, handleClearWarnComponent } from './lib/clear-warnings.js';
 
-// Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot).
-http
-  .createServer((_, res) => res.end('ok'))
-  .listen(process.env.PORT || 3000);
+// Keep-alive endpoint for hosts that need an open port (Render + UptimeRobot). Also serves the Terms and Privacy page.
+http.createServer(handleHttp).listen(process.env.PORT || 3000);
+if (!legalUrl()) console.warn('No PUBLIC_URL set: the guide will not link to the Terms of Use and Privacy Policy page.');
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and fill it in.');
