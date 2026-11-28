@@ -1,46 +1,50 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import * as db from '../db.js';
 import { COLOR, formatDateTime, prefix } from './format.js';
-import { legalUrl } from './legal.js';
+import { CONCERNS_ANCHOR, legalUrl } from './legal.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const running = new Set();
 
 export const GUIDE_PREFIX = 'guide';
-const PAGES = ['Overview', 'How to Use', 'Rules'];
-export const RULES_PAGE = 2; // index of "Rules", where the "Read the rules" button in warning DMs lands
 
-/** A "###" heading with its points quoted underneath. Shared by every list in the guide. */
-const block = (title, points) => [`### ${title}`, ...points.map((p) => `> - ${p}`)].join('\n');
+/** A "##" heading with its points quoted underneath. Shared by every list in the guide. */
+const block = (title, points) => [`## ${title}`, ...points.map((p) => `> - ${p}`)].join('\n');
 
 function overviewPage({ cfg }) {
   const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
-  const minutes = cfg?.self_delete_minutes ?? 10;
   const url = legalUrl();
-  const faqs = [
-    ['Is it really anonymous?', 'Your name and picture never show on a post. The bot does record the sender: the server owner can look it up with a PIN, and whoever runs the bot can access its data.'],
-    ['What can I post?', 'Confessions, crushes, shoutouts, questions, appreciation, and honest feedback about student life, within the Rules.'],
-    ['Where do posts appear?', `In ${where}, unless the server sends a topic to its own channel.`],
-    ['Are posts moderated?', cfg?.approval_mode ? 'Yes. A moderator approves each post before it goes up.' : 'Yes. Moderators can remove posts, and rule-breakers may be warned or banned.'],
-    ['Can I delete my post?', minutes > 0 ? `Within ${minutes} minute${minutes === 1 ? '' : 's'}: right-click it > Apps > **Delete my submission**.` : 'Ask a moderator.'],
-  ];
+  // Without a public address there is no web page to link to.
+  const links = url
+    ? [
+        `[Terms of Service](${url}#terms)`,
+        `[Privacy Policy](${url}#privacy)`,
+        `[General FAQs](${url}#faq)`,
+        `[Inquiries and Concerns](${url}#${CONCERNS_ANCHOR})`,
+        '[Discord Community Guidelines](https://discord.com/guidelines)',
+      ]
+    : [];
   return [
-    '# OVERVIEW',
-    '',
     '**STFW** · *noun* `/ˌɛs-ti-ɛf-ˈdʌbəl-ju/`',
     '> ***S**erver **T**houghts **F**reedom **W**all*; an anonymous outlet for unfiltered thoughts and confessions.',
     "*When you're told to STFU, let the wall do the talking instead.*",
+    '## Why does this exist?',
+    'Many students have something to say but hesitate to say it openly. The bot gives everyone a safe, simple space to speak up.',
     '',
-    '## FAQs',
-    ...faqs.map(([question, answer]) => `### ${question}\n> ${answer}`),
-    ...(url ? ['', `By posting, you agree to the [Terms of Use](${url}#terms) and [Privacy Policy](${url}#privacy).`] : []),
+    'Confessions, crushes, shoutouts, questions, and appreciation posts are all welcome. Honest feedback about student life on campus, including constructive criticism of professors, is also allowed within the guidelines.',
+    '## What do we stand for?',
+    'The page supports freedom of expression with responsibility and respect. Every post goes through moderation to keep the space safe for everyone.',
+    '## Where do posts appear?',
+    `Every submission is posted in ${where}.`,
+    ...(links.length ? ['## Links', ...links.map((link) => `- ${link}`)] : []),
   ].join('\n');
 }
 
-function howToPage({ cfg }) {
+/** The ways to use the bot, as [title, points]. */
+function howToItems({ cfg }) {
   const where = cfg?.channel_id ? `<#${cfg.channel_id}>` : 'the submissions channel';
   const p = prefix();
-  const ways = [
+  return [
     ['Slash command', [
       'Type `/fw` in any channel of the server, or in the bot’s DMs.',
       'Fill in the message field. Optional: `topic`, `image`, or `poll` (`yes/no`, or options split by `|`).',
@@ -75,7 +79,6 @@ function howToPage({ cfg }) {
       'Enough reports hide the post until a moderator reviews it.',
     ]],
   ];
-  return ['# HOW TO USE IT', ...ways.map(([title, points], i) => block(`${i + 1}. ${title}.`, points))].join('\n');
 }
 
 // The server's official rules, as [title, points].
@@ -122,31 +125,37 @@ const RULES = [
   ]],
 ];
 
-const rulesPage = () => ['# RULES', ...RULES.map(([title, points], i) => block(`${i + 1}. ${title}.`, points))].join('\n');
+/** One guide page holding `size` numbered items, starting at item `from`. */
+const listPage = (items, from, size) => (context) =>
+  (typeof items === 'function' ? items(context) : items)
+    .slice(from, from + size)
+    .map(([title, points], i) => block(`${from + i + 1}. ${title}.`, points))
+    .join('\n');
 
-const BUILDERS = [overviewPage, howToPage, rulesPage];
+// Overview, How to Use (two pages of three), Rules (two pages of five).
+const BUILDERS = [overviewPage, listPage(howToItems, 0, 3), listPage(howToItems, 3, 3), listPage(RULES, 0, 5), listPage(RULES, 5, 5)];
+export const RULES_PAGE = 3; // first page of the rules, where the "Read the rules" button in warning DMs lands
 
-/** Navigation buttons, one per page, all in one row (Discord allows five per row). */
+/** Previous and next arrows; each is off at its end of the guide. */
 function navRows(guildId, page) {
-  const buttons = PAGES.map((label, i) =>
+  const arrow = (label, target) =>
     new ButtonBuilder()
-      .setCustomId(`${GUIDE_PREFIX}:${guildId}:${i}`)
+      .setCustomId(`${GUIDE_PREFIX}:${guildId}:${target}`)
       .setLabel(label)
-      .setStyle(i === page ? ButtonStyle.Primary : ButtonStyle.Secondary)
-      .setDisabled(i === page),
-  );
-  return [new ActionRowBuilder().addComponents(buttons)];
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(target < 0 || target >= BUILDERS.length);
+  return [new ActionRowBuilder().addComponents(arrow('←', page - 1), arrow('→', page + 1))];
 }
 
-/** One page of the guide (overview, how to use, rules) plus its buttons. */
+/** One page of the guide (overview, how to use, rules) plus its arrows. */
 export function guidePayload(guild, page = 0) {
-  const index = Number.isInteger(page) && page >= 0 && page < PAGES.length ? page : 0;
+  const index = Number.isInteger(page) && page >= 0 && page < BUILDERS.length ? page : 0;
   const cfg = db.getGuild(guild.id);
   // No author line or server icon: the guide does not show which server it came from.
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .setDescription(BUILDERS[index]({ guild, cfg }))
-    .setFooter({ text: `Page ${index + 1} of ${PAGES.length} • brought to you by STFW • ${formatDateTime()}` });
+    .setFooter({ text: `Page ${index + 1} of ${BUILDERS.length} • brought to you by STFW • ${formatDateTime()}` });
   return { embeds: [embed], components: navRows(guild.id, index) };
 }
 

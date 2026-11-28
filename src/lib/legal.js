@@ -1,4 +1,4 @@
-// The Terms of Use and Privacy Policy, served as one web page by the bot's own HTTP server (design: legal-page.js).
+// The Terms of Use, Privacy Policy and FAQ, served as one web page by the bot's own HTTP server (design: legal-page.js).
 // The privacy text describes what the code actually stores: update it when that changes.
 import { renderLegalPage } from './legal-page.js';
 
@@ -153,6 +153,43 @@ const PRIVACY = [
   },
 ];
 
+const CONCERNS = 'Inquiries and concerns';
+
+const FAQ = [
+  {
+    title: 'Is it really anonymous?',
+    body: 'Your name and picture never show on a post. The bot does record the sender: the server owner can look it up with a PIN, and whoever runs the bot can access its data.',
+  },
+  {
+    title: 'What can I post?',
+    body: 'Confessions, crushes, shoutouts, questions, appreciation, and honest feedback about student life, within the Rules in the bot’s guide.',
+  },
+  {
+    title: 'Where do posts appear?',
+    body: 'In the server’s submissions channel, unless the server sends a topic to its own channel.',
+  },
+  {
+    title: 'Are posts moderated?',
+    body: 'Yes. Moderators can remove posts, and rule-breakers may be warned or banned. Some servers approve each post before it goes up.',
+  },
+  {
+    title: 'Can I delete my post?',
+    body: 'For a short time after posting, if the server allows it: right-click your post, open Apps, then pick Delete my submission. After that, ask a moderator.',
+  },
+  {
+    title: CONCERNS,
+    points: [
+      'To report a post, press Report under it.',
+      'To contest a warning, use /appeal with the warning ID.',
+      'To appeal a ban, send the bot a direct message with its prefix, the word appeal, and your reason (for example: fw appeal, then why).',
+      'For anything else, including removing a post or your stored data, message the server’s moderators or owner.',
+    ],
+  },
+];
+
+/** The part of the address that opens "Inquiries and concerns" ("faq-6"). */
+export const CONCERNS_ANCHOR = `faq-${FAQ.findIndex((s) => s.title === CONCERNS) + 1}`;
+
 // "Who sees what" at the top of the Privacy Policy. It only restates the policy above: keep the two in step.
 const WHO = {
   heading: 'Who sees what',
@@ -173,5 +210,6 @@ const LEGAL_HTML = renderLegalPage({
   docs: [
     { id: 'terms', name: 'Terms of Use', sections: TERMS },
     { id: 'privacy', name: 'Privacy Policy', sections: PRIVACY, who: WHO },
+    { id: 'faq', name: 'FAQ', sections: FAQ },
   ],
 });

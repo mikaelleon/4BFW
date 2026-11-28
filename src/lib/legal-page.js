@@ -57,7 +57,7 @@ const STYLE = String.raw`
   /* The sliding thumb under the picked segment. --i is the picked index. */
   .tabs::before, .who fieldset::before { content: ""; position: absolute; z-index: -1; top: 4px; bottom: 4px; left: 4px;
     width: calc((100% - 8px) / var(--n)); border-radius: var(--r3); background: var(--fill); transform: translateX(calc(var(--i, 0) * 100%)); }
-  .tabs { --n: 2; }
+  .tabs { --n: 3; }
   .tabs button { position: relative; height: 36px; padding-inline: 1rem; border-radius: var(--r3); color: var(--muted); }
   .tabs button::after { content: ""; position: absolute; inset: -4px 0; }
   .tabs button[aria-selected="true"] { color: #fff; }
@@ -163,6 +163,7 @@ const STYLE = String.raw`
     .tools #theme { justify-self: end; }
     .toggle { gap: .5rem; padding-left: .75rem; font-size: .875rem; }
     .long { display: none; }
+    .tabs button { padding-inline: .25rem; font-size: .875rem; }
     article { scroll-margin-top: 132px; }
     article p { grid-column: 1 / -1; }
     article ul { grid-column: 1 / -1; padding-left: 2rem; }
@@ -394,7 +395,7 @@ const tabName = (name) => {
 
 /** The whole page. `docs` is [{ id, name, who?, sections: [{ title, body?, points?, example? }] }]; ids hold no "-". */
 export function renderLegalPage({ updated, docs, related = [] }) {
-  const names = docs.map((d) => d.name).join(' and ');
+  const names = new Intl.ListFormat('en').format(docs.map((d) => d.name));
   return `<!doctype html>
 <html lang="en">
 <head>
