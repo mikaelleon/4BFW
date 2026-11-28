@@ -1,0 +1,145 @@
+{
+  "version": 2,
+  "skills": {
+    "charles-3d-explainers": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-3d-explainers/SKILL.md",
+      "computedHash": "1c5f51be6482abae6b0c2b63c3d07a6975db73f9c46e9b5c452a1682bf7e42ae"
+    },
+    "charles-app-audit": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/drops/charles-app-audit/SKILL.md",
+      "computedHash": "4d9cb65ecc29ad2704fabc6b3de15adfb37b2bd8e0da8a97bb85054b23eb1746"
+    },
+    "charles-arcade-assets": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-arcade-assets/SKILL.md",
+      "computedHash": "949243f67b4136d5f3e6a0b98f1522b0d28eb9d5bcdc3ea1b9380d4ddf500446"
+    },
+    "charles-claude-editing": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-claude-editing/SKILL.md",
+      "computedHash": "e2f25d3474d55678ffdf8c2f34ac36b7516e2bcba14cc19f84da2a1c4a082cc5"
+    },
+    "charles-color-analysis": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-color-analysis/SKILL.md",
+      "computedHash": "9f68aec893d2a6859fdb3eb02fd1a37f193ed7ed53fa2add1e03fa0cb17c4dc0"
+    },
+    "charles-create-posters": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/drops/charles-create-posters/SKILL.md",
+      "computedHash": "a7bb8a4d28eadf5ab3568e49beda3a2960266b913307a606186b90e699925b74"
+    },
+    "charles-design-laws": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/drops/charles-design-laws/SKILL.md",
+      "computedHash": "2f30b407c0c3ef27d42211af34c962428a40f9acc5591d1dc6a6666bca26e4db"
+    },
+    "charles-design-tips": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/drops/charles-design-tips/SKILL.md",
+      "computedHash": "82e2e4ae46d1d0fd92ed79da06742f677922099288bda882272b4aa57838ac93"
+    },
+    "charles-eli14": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/qol/charles-eli14/SKILL.md",
+      "computedHash": "1e6ab11a3db0293e65fc2a6a968eb2a6eb65a261dbf7b2e115fb2e444c51e124"
+    },
+    "charles-explainers-assets": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-explainers-assets/SKILL.md",
+      "computedHash": "94c0cc25cf6046be3ed06731efebfd57efa385a0fce15be95f3d0a7ef5918fdb"
+    },
+    "charles-hero-mockups": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/drops/charles-hero-mockups/SKILL.md",
+      "computedHash": "bf60e76fe820f3818fdc2e553e1e97d237e5b81f6b873fdb23c9d98522e12afc"
+    },
+    "charles-learn-anything": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/qol/charles-learn-anything/SKILL.md",
+      "computedHash": "9db313bc9bf7cc3c8739ffc9af336540b0bd5ce7c5bf790e64ab82c55b624c02"
+    },
+    "charles-polish": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-polish/SKILL.md",
+      "computedHash": "acd718ee33df75a75ca82e0ddd5c65ebe20ae355148002840902af3fa9177e8c"
+    },
+    "charles-reel-plans": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-reel-plans/SKILL.md",
+      "computedHash": "3a8d5559a849094a6e84449bb04ad834fbf331a8fd4c102fbb8e0ca51d7affa8"
+    },
+    "charles-scripting-voice": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/editing/charles-scripting-voice/SKILL.md",
+      "computedHash": "41f95fe12daf1503a2e4747e284193a2dd436cf72a3ac90e09bd7d397fe3bd5b"
+    },
+    "charles-storage-cleanup": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/qol/charles-storage-cleanup/SKILL.md",
+      "computedHash": "73a947dba46ef87ad2c6bfc21ca03cc001440d66d46931c837779465fefef4b1"
+    },
+    "charles-store-screenshots": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-store-screenshots/SKILL.md",
+      "computedHash": "7dda547c32d1a835c24e12b90f47d4499177d9fabfc56f7d37f2b575d117f5e7"
+    },
+    "charles-unreasonable-craft": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-unreasonable-craft/SKILL.md",
+      "computedHash": "5a8bcf378506377dac1148a2d3df58747fa402ec5044670c5f605a76fde2ecb4"
+    },
+    "charles-unslop": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-unslop/SKILL.md",
+      "computedHash": "21376b04d5d8c476bfedf761520b7201463eb2e528b364d513332f1a0efd8526"
+    },
+    "charles-ux-animation": {
+      "source": "LemonFace0309/charles-skills",
+      "commit": "a24c5f2c54d477c67e5407d49ae6c9da08c7ed80",
+      "sourceType": "github",
+      "skillPath": "skills/design/charles-ux-animation/SKILL.md",
+      "computedHash": "b5e599531a6a7897f15446cb5dcf6b363e109c9584935d9ca1bddab991037c22"
+    }
+  }
+}

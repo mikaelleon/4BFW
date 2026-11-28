@@ -1,5 +1,7 @@
-// The Terms of Use and Privacy Policy, served as one web page by the bot's own HTTP server.
+// The Terms of Use and Privacy Policy, served as one web page by the bot's own HTTP server (design: legal-page.js).
 // The privacy text describes what the code actually stores: update it when that changes.
+import { renderLegalPage } from './legal-page.js';
+
 const UPDATED = 'November 28, 2026';
 
 export const LEGAL_PATH = '/legal';
@@ -20,136 +22,158 @@ export function handleHttp(req, res) {
   return res.end(LEGAL_HTML);
 }
 
-// Each section is [title, points].
+const DISCORD = {
+  terms: 'https://discord.com/terms',
+  privacy: 'https://discord.com/privacy',
+  guidelines: 'https://discord.com/guidelines',
+};
+
+// `links` turns a phrase of that section's text into a link.
 const TERMS = [
-  ['Acceptance', [
-    'By using STFW, you agree to these Terms of Use, the Privacy Policy, and the Rules shown in the bot’s guide.',
-    'If you disagree, do not submit, reply, react, vote, or report.',
-  ]],
-  ['What STFW does', [
-    'STFW lets members of a Discord server post messages, images, polls, and replies without their name or profile picture shown on the post.',
-    'Each server decides its own channels, limits, and moderators.',
-  ]],
-  ['Eligibility', [
-    'You must be allowed to use Discord under Discord’s Terms of Service, including its minimum age.',
-    'A server may require a minimum account age or time in the server before you can post.',
-  ]],
-  ['Your submissions', [
-    'You are solely responsible for what you post. Only submit content you are willing to stand behind.',
-    'You must have the right to share any text or image you submit.',
-    'By submitting, you allow the bot to store it, post it in the server, show it to moderators, and copy it to a featured or highlights channel.',
-  ]],
-  ['Prohibited use', [
-    'Do not use the bot to harass, bully, threaten, impersonate, or expose anyone.',
-    'Do not post hate speech, explicit, illegal, or dangerous content, or other people’s private information.',
-    'Do not spam, advertise, evade a ban, file false reports, or try to abuse or disrupt the bot.',
-  ]],
-  ['Moderation', [
-    'Moderators may review, hold, hide, or delete any submission at their discretion.',
-    'Posts may be checked by an automatic filter, and a server may require approval before a post goes up.',
-    'Rule-breakers may be warned or banned from posting without prior notice.',
-    'You can contest a warning with /appeal, or a ban by messaging the bot with the word appeal after its prefix.',
-  ]],
-  ['Anonymity has limits', [
-    'Your post hides your identity from other members, but the bot records who sent it.',
-    'What you write or upload can still identify you.',
-    'Inside a reply thread you keep one alias, so your replies in that thread can be linked to each other.',
-  ]],
-  ['No guarantees', [
-    'The bot is provided “as is,” and posts may be delayed or lost because of technical issues.',
-    'Opinions in submissions belong to their authors, not the developer, the server, or its moderators.',
-  ]],
-  ['Limitation of liability', [
-    'To the extent the law allows, the developer is not liable for any conflict, dispute, damage, or harm arising from submitted content or use of the bot.',
-  ]],
-  ['Changes', [
-    'These terms may be updated at any time. Continued use means you accept the updated terms.',
-  ]],
+  {
+    title: 'Using STFW means accepting the rules that govern it.',
+    body: 'By interacting with the bot in any way, you agree to be bound by these Terms of Use together with the Privacy Policy and the rules set out in the bot’s guide, and if you do not agree with them, you should not use STFW at all.',
+    example: 'Submitting a post, replying to someone else’s, or running one of the bot’s commands each counts as interacting with it.',
+  },
+  {
+    title: 'STFW exists so members can speak without being identified.',
+    body: 'The bot posts text and images on a member’s behalf without displaying their name or avatar, while leaving each server free to decide which channels the wall uses, how often members may post, and who moderates it.',
+    example: 'One server might open a single channel with a daily posting limit, whereas another might run several channels under much stricter review.',
+  },
+  {
+    title: 'You need to be eligible to use the bot.',
+    body: 'You must be permitted to use Discord under its own terms before you can use STFW, and because each server manages its own community, a server may layer additional requirements on top of that baseline.',
+    example: 'A server may require that your account be a certain age, or that you have been a member for a set period, before you are allowed to post.',
+    links: [['its own terms', DISCORD.terms]],
+  },
+  {
+    title: 'You are responsible for everything you submit.',
+    body: 'You must have the right to share any text or images you post, and by submitting them you accept that they may be stored, published to the wall, shown to moderators, and copied to featured channels.',
+    example: 'An image you did not create and have no permission to use should not be submitted, and a post that gets featured may end up appearing in more than one place.',
+  },
+  {
+    title: 'The wall may not be used to harm or disrupt others.',
+    body: 'Harassment, impersonation, exposing other people, hate speech, and explicit or dangerous content are all prohibited, as are sharing someone’s private information and abusing the bot itself through spam, ban evasion, false reports, or any attempt to disrupt how it works.',
+    example: 'Posting a classmate’s real name or contact details, or a screenshot of a private conversation, is a violation even when the post itself is anonymous.',
+  },
+  {
+    title: 'Moderators are responsible for keeping the wall safe.',
+    body: 'Moderators may review, hold, hide, or delete posts, and automatic filters or approval requirements may also apply, so anyone who breaks the rules can be warned or banned without advance notice, although both warnings and bans can be appealed.',
+    example: 'A post may be held until a moderator approves it, or it may be taken down after publication if a moderator later decides that it breaks the rules.',
+  },
+  {
+    title: 'Anonymity on the wall has real limits.',
+    body: 'The bot keeps a record of who sent each post, and what you write can still reveal who you are, while all replies within a single thread share one alias that other readers can link back to the same person.',
+    example: 'Mentioning your section, an event that only a few people attended, or a writing style your friends would recognize can be enough for others to guess that a post is yours.',
+  },
+  {
+    title: 'STFW is offered as it is, without promises.',
+    body: 'The bot comes with no guarantee that it will always work as expected, and posts may be delayed or lost, while the opinions that appear on the wall belong to the people who wrote them rather than to STFW or its developer.',
+    example: 'A post may fail to appear during downtime, and the views expressed in any given post do not represent those of the bot or the server hosting it.',
+  },
+  {
+    title: 'The developer’s liability is limited.',
+    body: 'To the fullest extent the law allows, the developer is not responsible for disputes or harm that arise from submissions or from the use of the bot, which means you use STFW at your own risk.',
+    example: 'If a post leads to a conflict between members, the developer cannot be held liable for it.',
+  },
+  {
+    title: 'These terms may change over time.',
+    body: 'The Terms can be updated at any time, and by continuing to use STFW after an update has been made, you accept the revised version as the one that applies to you.',
+    example: 'The “last updated” date at the top of the page shows when the Terms were last changed, so it is worth checking whenever you return.',
+  },
 ];
 
 const PRIVACY = [
-  ['What we collect', [
-    'Your submissions: text, images, topic, content warning, poll options, and the time sent.',
-    'Your Discord user ID, linked to each submission.',
-    'Your activity: reactions, poll votes, reports, appeals, and your notification and preview settings.',
-    'Moderation records: warnings, bans, and moderator notes.',
-    'Direct messages you send to the bot, as needed to handle commands and submissions.',
-    'We do not ask for your real name, email address, or phone number.',
-  ]],
-  ['How it is used', [
-    'To post and display submissions, send you reply and moderation messages, and prevent abuse.',
-    'Your data is never sold or shared with advertisers.',
-  ]],
-  ['Who can see it', [
-    'Posts do not show your name or profile picture.',
-    'Moderators see the text and images of submissions, but not sender IDs in the mod log.',
-    'The server owner can look up the sender of a submission using a private PIN.',
-    'Whoever runs the bot has access to its database.',
-    'Information may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.',
-  ]],
-  ['How it is protected', [
-    'Warnings, bans, notes, votes, reactions, and reports are stored under a keyed hash instead of your Discord ID.',
-    'Your Discord ID is still stored with your submissions, and in a few places where the bot needs it to message you.',
-    'Hidden image details, such as location and camera data, are removed before an image is stored or posted.',
-    'Database backups, when turned on, are encrypted and saved to a private Discord channel.',
-    'No system is perfectly secure.',
-  ]],
-  ['How long it is kept', [
-    'Each server sets its own retention period. When one is set, the sender ID, text, and images of older submissions are erased from the database.',
-    'If no period is set, they are kept until removed.',
-    'Moderation records can be kept after that erasure. Leaving a server does not delete your data.',
-    'Messages already posted in Discord, and older backups, are not changed by the erasure.',
-  ]],
-  ['Your choices', [
-    'You can delete your own post for a short time after posting, if the server allows it.',
-    'You can turn off reply notifications.',
-    'To have a post removed or your stored data deleted, ask the server’s owner or moderators.',
-  ]],
-  ['Third parties', [
-    'The bot runs on Discord, which has its own Terms of Service and Privacy Policy.',
-    'It also relies on a hosting provider to run and store its data.',
-  ]],
-  ['Changes', [
-    'This policy may be updated at any time. The date at the top shows the latest version.',
-  ]],
+  {
+    title: 'What we collect',
+    points: [
+      'Your submissions: text, images, topic, content warning, poll options, and the time sent.',
+      'Your Discord user ID, linked to each submission.',
+      'Your activity: reactions, poll votes, reports, appeals, and your notification and preview settings.',
+      'Moderation records: warnings, bans, and moderator notes.',
+      'Direct messages you send to the bot, as needed to handle commands and submissions.',
+      'We do not ask for your real name, email address, or phone number.',
+    ],
+  },
+  {
+    title: 'How it is used',
+    points: [
+      'To post and display submissions, send you reply and moderation messages, and prevent abuse.',
+      'Your data is never sold or shared with advertisers.',
+    ],
+  },
+  {
+    title: 'Who can see it',
+    points: [
+      'Posts do not show your name or profile picture.',
+      'Moderators see the text and images of submissions, but not sender IDs in the mod log.',
+      'The server owner can look up the sender of a submission using a private PIN.',
+      'Whoever runs the bot has access to its database.',
+      'Information may be disclosed if required by law or school authorities, or if a post involves serious harm or illegal activity.',
+    ],
+  },
+  {
+    title: 'How it is protected',
+    points: [
+      'Warnings, bans, notes, votes, reactions, and reports are stored under a keyed hash instead of your Discord ID.',
+      'Your Discord ID is still stored with your submissions, and in a few places where the bot needs it to message you.',
+      'Hidden image details, such as location and camera data, are removed before an image is stored or posted.',
+      'Database backups, when turned on, are encrypted and saved to a private Discord channel.',
+      'No system is perfectly secure.',
+    ],
+  },
+  {
+    title: 'How long it is kept',
+    points: [
+      'Each server sets its own retention period. When one is set, the sender ID, text, and images of older submissions are erased from the database.',
+      'If no period is set, they are kept until removed.',
+      'Moderation records can be kept after that erasure. Leaving a server does not delete your data.',
+      'Messages already posted in Discord, and older backups, are not changed by the erasure.',
+    ],
+  },
+  {
+    title: 'Your choices',
+    points: [
+      'You can delete your own post for a short time after posting, if the server allows it.',
+      'You can turn off reply notifications.',
+      'To have a post removed or your stored data deleted, ask the server’s owner or moderators.',
+    ],
+  },
+  {
+    title: 'Third parties',
+    points: [
+      'The bot runs on Discord, which has its own Terms of Service and Privacy Policy.',
+      'It also relies on a hosting provider to run and store its data.',
+    ],
+    links: [['Terms of Service', DISCORD.terms], ['Privacy Policy', DISCORD.privacy]],
+  },
+  {
+    title: 'Changes',
+    points: ['This policy may be updated at any time. The date at the top shows the latest version.'],
+  },
 ];
 
-const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// "Who sees what" at the top of the Privacy Policy. It only restates the policy above: keep the two in step.
+const WHO = {
+  heading: 'Who sees what',
+  post: { title: 'Anonymous #012', text: 'Whoever keeps leaving kind notes on the library tables, thank you. Finals week needed it.' },
+  viewers: [
+    { name: 'Member', sender: false, answer: 'Sees the post without your name or picture. What you write or upload can still give you away.' },
+    { name: 'Moderator', sender: false, answer: 'Sees the text and images, but no sender ID in the mod log.' },
+    { name: 'Server owner', sender: true, answer: 'Can look up who sent the post, using a private PIN.' },
+    { name: 'Bot host', sender: true, answer: 'Has access to the database, where your Discord ID is stored with your submissions.' },
+  ],
+};
 
-const section = (id, heading, items) =>
-  [
-    `<section id="${id}">`,
-    `<h2>${heading}</h2>`,
-    ...items.map(
-      ([title, points], i) =>
-        `<h3>${i + 1}. ${escapeHtml(title)}</h3>\n<ul>${points.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`,
-    ),
-    '</section>',
-  ].join('\n');
-
-const LEGAL_HTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>STFW · Terms of Use and Privacy Policy</title>
-<style>
-  :root { color-scheme: light dark; --accent: #821b33; }
-  @media (prefers-color-scheme: dark) { :root { --accent: #f0a03c; } }
-  body { max-width: 42rem; margin: 0 auto; padding: 2rem 1rem 4rem; font: 1rem/1.6 system-ui, sans-serif; }
-  h1, h2, h3 { line-height: 1.25; }
-  h2 { margin-top: 3rem; padding-bottom: .4rem; border-bottom: 2px solid var(--accent); }
-  h3 { margin: 1.75rem 0 .25rem; font-size: 1.05rem; }
-  ul { margin: 0; padding-left: 1.25rem; }
-  a { color: var(--accent); }
-</style>
-</head>
-<body>
-<h1>STFW · Server Thoughts Freedom Wall</h1>
-<p>Last updated: ${UPDATED}</p>
-<nav><a href="#terms">Terms of Use</a> · <a href="#privacy">Privacy Policy</a></nav>
-${section('terms', 'Terms of Use', TERMS)}
-${section('privacy', 'Privacy Policy', PRIVACY)}
-</body>
-</html>
-`;
+const LEGAL_HTML = renderLegalPage({
+  updated: UPDATED,
+  related: [
+    ['Terms of Service', DISCORD.terms],
+    ['Privacy Policy', DISCORD.privacy],
+    ['Community Guidelines', DISCORD.guidelines],
+  ],
+  docs: [
+    { id: 'terms', name: 'Terms of Use', sections: TERMS },
+    { id: 'privacy', name: 'Privacy Policy', sections: PRIVACY, who: WHO },
+  ],
+});
