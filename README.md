@@ -25,6 +25,8 @@ Anonymous submissions (freedom wall) bot for Discord. Node 22.13+ (uses built-in
 | `PORT` | no | HTTP keep-alive (default `3000`) |
 | `PUBLIC_URL` | no | Public address of the bot's HTTP server. The guide links to `<PUBLIC_URL>/legal` (Terms of Use and Privacy Policy, text in `src/lib/legal.js`). Defaults to Render's `RENDER_EXTERNAL_URL`; with neither, the guide has no link |
 
+Moving to Supabase Postgres: [docs/supabase.md](docs/supabase.md) has the schema, scripts and steps. The bot still runs on SQLite.
+
 ## Sending a submission
 
 | Way | How |

@@ -6,13 +6,18 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "deploy": "node src/deploy-commands.js"
+    "deploy": "node src/deploy-commands.js",
+    "db:pull": "node src/restore.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:status": "node scripts/migrate.js --status",
+    "db:copy": "node scripts/copy-to-postgres.js"
   },
   "engines": {
     "node": ">=22.13"
   },
   "dependencies": {
     "discord.js": "^14.28.1",
-    "dotenv": "^18.0.10"
+    "dotenv": "^18.0.10",
+    "pg": "^8.23.1"
   }
 }
